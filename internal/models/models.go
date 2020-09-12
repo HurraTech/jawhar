@@ -4,6 +4,10 @@ import (
 	"gorm.io/gorm"
 )
 
+type Source interface {
+	Type()
+}
+
 type Drive struct {
 	gorm.Model
 	Name         string
@@ -29,4 +33,12 @@ type DrivePartition struct {
 	Filesystem     string
 	MountPoint     string
 	Status         string
+	Type           string `gorm:"default:partition"`
+	Index          Index
+}
+
+type Index struct {
+	gorm.Model
+	DrivePartitionID int
+	SizeBytes        int
 }

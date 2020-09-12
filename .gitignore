@@ -49,4 +49,8 @@ Thumbs.db
 *.wmv
 
 # sqlite
-# *.db
+*.db
+
+# jawhar 
+mounts/
+./jawhar
