@@ -1,0 +1,3 @@
+[submodule "zahif"]
+	path = zahif
+	url = git@bitbucket.org:aimannajjar/zahif.git

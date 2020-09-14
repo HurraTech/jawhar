@@ -12,12 +12,15 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"hurracloud.io/jawhar/internal/agent"
 	pb "hurracloud.io/jawhar/internal/agent/proto"
 	"hurracloud.io/jawhar/internal/database"
 	"hurracloud.io/jawhar/internal/models"
+	zahif "hurracloud.io/jawhar/internal/zahif"
+	zahif_pb "hurracloud.io/jawhar/internal/zahif/proto"
 )
 
 type Controller struct {
@@ -87,6 +90,27 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 				aPartition.Status = "unmountable"
 			}
 
+			indexID := fmt.Sprintf("%s-%d", aPartition.Type, aPartition.ID)
+			indexProgressRes, err := zahif.Client.IndexProgress(context.Background(), &zahif_pb.IndexProgressRequest{
+				IndexIdentifier: indexID,
+			})
+
+			if err == nil {
+				aPartition.IndexProgress = indexProgressRes.PercentageDone
+				if aPartition.IndexProgress >= 100 {
+					aPartition.IndexStatus = "created"
+				} else if !indexProgressRes.IsRunning && aPartition.IndexStatus == "deleting" {
+					aPartition.IndexStatus = "" // index has been fully deleted
+				} else if !indexProgressRes.IsRunning && aPartition.IndexStatus == "pausing" {
+					aPartition.IndexStatus = "paused"
+				} else if indexProgressRes.IsRunning && aPartition.IndexStatus == "resuming" {
+					aPartition.IndexStatus = "creating"
+				}
+
+				aPartition.IndexTotalDocuments = indexProgressRes.TotalDocuments
+				aPartition.IndexIndexedDocuments = indexProgressRes.IndexedDocuments
+			}
+
 			database.DB.Save(&aPartition)
 		}
 
@@ -122,6 +146,231 @@ func (c *Controller) MountSource(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
 	}
 	return ctx.JSON(http.StatusOK, map[string]string{"message": "partition moutned"})
+}
+
+/* POST /sources/:type/:id/search */
+func (c *Controller) SearchSource(ctx echo.Context) error {
+	sourceType := ctx.Param("type")
+	sourceId := ctx.Param("id")
+
+	if ctx.QueryParam("q") == "" || ctx.QueryParam("from") == "" || ctx.QueryParam("to") == "" {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "query string parameters 'from', 'to' and 'query' are required"})
+	}
+
+	q := ctx.QueryParam("q")
+	from, err := strconv.Atoi(ctx.QueryParam("from"))
+	if err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("Could not parse 'from' Query Parameter: %s: %v", ctx.QueryParam("from"), err)})
+	}
+
+	to, err := strconv.Atoi(ctx.QueryParam("to"))
+	if err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("Could not parse 'to' Query Parameter: %s: %v", ctx.QueryParam("to"), err)})
+	}
+
+	limit := (to - from + 1)
+	results := []string{}
+	indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
+
+	if sourceType == "partition" {
+		var partition models.DrivePartition
+		result := database.DB.Where("id = ?", sourceId).First(&partition)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return ctx.JSON(http.StatusNotFound, result.Error)
+		} else if result.Error != nil {
+			log.Error("Unexpected error querying DB:", result.Error)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+
+		log.Debugf("Making Search Request to Zahif: IndexID=%s", indexID)
+		res, err := zahif.Client.SearchIndex(context.Background(), &zahif_pb.SearchIndexRequest{
+			IndexIdentifier: indexID,
+			Query:           q,
+			Limit:           int32(limit),
+			Offset:          int32(from),
+		})
+
+		if err != nil {
+			log.Errorf("Error while searching zahif: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+
+		results = res.Documents
+	} else {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
+	}
+
+	return ctx.JSON(http.StatusOK, results)
+}
+
+/* POST /sources/:type/:id/index */
+func (c *Controller) IndexSource(ctx echo.Context) error {
+	sourceType := ctx.Param("type")
+	sourceId := ctx.Param("id")
+	indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
+	var excludePatterns []string
+	m := echo.Map{}
+	if err := ctx.Bind(&m); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "failed to decode payload"})
+	}
+	log.Debugf("Received IndexSource request with payload: %v", m)
+
+	if patterns, ok := m["excludes"]; ok {
+		for _, pattern := range patterns.([]interface{}) {
+			excludePatterns = append(excludePatterns, pattern.(string))
+		}
+		log.Debugf("ExcludePatterns is: %v", excludePatterns)
+	}
+
+	if sourceType == "partition" {
+		var partition models.DrivePartition
+		result := database.DB.Where("id = ?", sourceId).First(&partition)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return ctx.JSON(http.StatusNotFound, result.Error)
+		} else if result.Error != nil {
+			log.Error("Unexpected error querying DB:", result.Error)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		} else if partition.Status != "mounted" {
+			return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "cannot index unmounted source"})
+		}
+
+		log.Debugf("Making Batch Index Request to Zahif: IndexID=%s", indexID)
+		_, err := zahif.Client.BatchIndex(context.Background(), &zahif_pb.BatchIndexRequest{
+			IndexIdentifier: indexID,
+			Target:          partition.MountPoint,
+			ExcludePatterns: excludePatterns,
+		})
+
+		if err != nil {
+			log.Errorf("Error while creating index on zahif: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+
+		partition.IndexStatus = "creating"
+		partition.IndexExcludePatterns = strings.Join(excludePatterns, "|||")
+		database.DB.Save(&partition)
+
+	} else {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{"message": "index scheduled"})
+}
+
+/* DELETE /sources/:type/:id/index */
+func (c *Controller) DeleteIndex(ctx echo.Context) error {
+	sourceType := ctx.Param("type")
+	sourceId := ctx.Param("id")
+	indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
+
+	if sourceType == "partition" {
+		var partition models.DrivePartition
+		result := database.DB.Where("id = ?", sourceId).First(&partition)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return ctx.JSON(http.StatusNotFound, result.Error)
+		} else if result.Error != nil {
+			log.Error("Unexpected error querying DB:", result.Error)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		} else if partition.IndexStatus == "" {
+			return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "source is not indexed"})
+		}
+
+		log.Debugf("Making Delete Index Request to Zahif: IndexID=%s", indexID)
+		_, err := zahif.Client.DeleteIndex(context.Background(), &zahif_pb.DeleteIndexRequest{
+			IndexIdentifier: indexID,
+		})
+
+		if err != nil {
+			log.Errorf("Error while deleting index on zahif: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+
+		partition.IndexStatus = "deleting"
+		database.DB.Save(&partition)
+
+	} else {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{"message": "index deletion scheduled"})
+}
+
+/* POST /sources/:type/:id/resumeIndex */
+func (c *Controller) ResumeIndex(ctx echo.Context) error {
+	sourceType := ctx.Param("type")
+	sourceId := ctx.Param("id")
+	indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
+
+	if sourceType == "partition" {
+		var partition models.DrivePartition
+		result := database.DB.Where("id = ?", sourceId).First(&partition)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return ctx.JSON(http.StatusNotFound, result.Error)
+		} else if result.Error != nil {
+			log.Error("Unexpected error querying DB:", result.Error)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		} else if partition.IndexStatus == "" {
+			return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "source is not indexed"})
+		}
+
+		log.Debugf("Making Batch Index Request to Zahif: IndexID=%s", indexID)
+		_, err := zahif.Client.BatchIndex(context.Background(), &zahif_pb.BatchIndexRequest{
+			IndexIdentifier: indexID,
+			Target:          partition.MountPoint,
+			ExcludePatterns: strings.Split(partition.IndexExcludePatterns, "|||"),
+		})
+
+		if err != nil {
+			log.Errorf("Error while resuming index on zahif: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+
+		partition.IndexStatus = "resuming"
+		database.DB.Save(&partition)
+
+	} else {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{"message": "index resume scheduled"})
+}
+
+/* POST /sources/:type/:id/pauseIndex */
+func (c *Controller) PauseIndex(ctx echo.Context) error {
+	sourceType := ctx.Param("type")
+	sourceId := ctx.Param("id")
+	indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
+
+	if sourceType == "partition" {
+		var partition models.DrivePartition
+		result := database.DB.Where("id = ?", sourceId).First(&partition)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return ctx.JSON(http.StatusNotFound, result.Error)
+		} else if result.Error != nil {
+			log.Error("Unexpected error querying DB:", result.Error)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		} else if partition.IndexStatus == "" {
+			return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "source is not indexed"})
+		}
+
+		log.Debugf("Making Stop Index Request to Zahif: IndexID=%s", indexID)
+		_, err := zahif.Client.StopIndex(context.Background(), &zahif_pb.StopIndexRequest{
+			IndexIdentifier: indexID,
+		})
+
+		if err != nil {
+			log.Errorf("Error while stopping index on zahif: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+
+		partition.IndexStatus = "pausing"
+		database.DB.Save(&partition)
+
+	} else {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{"message": "index stop scheduled"})
 }
 
 /* POST /sources/:type/:id/unmount */

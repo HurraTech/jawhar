@@ -10,6 +10,7 @@ import (
     "hurracloud.io/jawhar/internal/agent"
     "hurracloud.io/jawhar/internal/controller"
     "hurracloud.io/jawhar/internal/database"
+    "hurracloud.io/jawhar/internal/zahif"
 )
 
 type Options struct {
@@ -18,6 +19,8 @@ type Options struct {
     Database        flags.Filename `short:"d" long:"db" env:"DB" description:"Database filename" default:"jawhar.db"`
     AgentHost       string         `short:"H" long:"agent_host" env:"AGENT_HOST" description:"Agent Server Host" default:"127.0.0.1"`
     AgentPort       int            `short:"P" long:"agent_port" env:"AGENT_PORT" description:"Agent Server Port" default:"10000"`
+    ZahifHost       string         `short:"z" long:"zahif_host" env:"ZAHIF_HOST" description:"Zahif Server Host" default:"127.0.0.1"`
+    ZahifPort       int            `short:"o" long:"zahif_port" env:"ZAHIF_PORT" description:"Zahif Server Port" default:"10001"`
     MountPointsRoot string         `short:"m" long:"mount_points_root" env:"MOUNT_POINTS_ROOT" description:"Path under which drives should be mounted" default:"./mounts"`
     Verbose         bool           `short:"v" long:"verbose" description:"Enable verbose logging"`
 }
@@ -45,6 +48,7 @@ func main() {
     database.OpenDatabase(string(options.Database))
     database.Migrate()
     agent.Connect(options.AgentHost, options.AgentPort)
+    zahif.Connect(options.ZahifHost, options.ZahifPort)
 
     mountRoot, err := filepath.Abs(options.MountPointsRoot)
     if err != nil {
@@ -56,6 +60,11 @@ func main() {
     e.GET("/sources", controller.GetSources)
     e.POST("/sources/:type/:id/mount", controller.MountSource)
     e.POST("/sources/:type/:id/unmount", controller.UnmountSource)
+    e.POST("/sources/:type/:id/search", controller.SearchSource)
+    e.POST("/sources/:type/:id/index", controller.IndexSource)
+    e.DELETE("/sources/:type/:id/index", controller.DeleteIndex)
+    e.POST("/sources/:type/:id/pauseIndex", controller.PauseIndex)
+    e.POST("/sources/:type/:id/resumeIndex", controller.ResumeIndex)
     e.GET("/sources/:type/:id", controller.BrowseSource)
     e.GET("/sources/:type/:id/*", controller.BrowseSource)
     log.Fatal(e.Start(fmt.Sprintf("%s:%d", options.Host, options.Port)))

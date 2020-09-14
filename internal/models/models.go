@@ -21,24 +21,22 @@ type Drive struct {
 
 type DrivePartition struct {
 	gorm.Model
-	Name           string
-	Caption        string
-	DriveID        int
-	Drive          Drive
-	DeviceFile     string
-	Label          string
-	IsReadOnly     bool
-	SizeBytes      uint64
-	AvailableBytes uint64
-	Filesystem     string
-	MountPoint     string
-	Status         string
-	Type           string `gorm:"default:partition"`
-	Index          Index
-}
-
-type Index struct {
-	gorm.Model
-	DrivePartitionID int
-	SizeBytes        int
+	Name                  string
+	Caption               string
+	DriveID               int
+	Drive                 Drive
+	DeviceFile            string
+	Label                 string
+	IsReadOnly            bool
+	SizeBytes             uint64
+	AvailableBytes        uint64
+	Filesystem            string
+	MountPoint            string
+	Status                string
+	Type                  string `gorm:"default:partition"`
+	IndexStatus           string
+	IndexProgress         float32
+	IndexTotalDocuments   int32
+	IndexIndexedDocuments int32
+	IndexExcludePatterns  string
 }
