@@ -154,7 +154,7 @@ func (c *Controller) SearchSource(ctx echo.Context) error {
 	sourceId := ctx.Param("id")
 
 	if ctx.QueryParam("q") == "" || ctx.QueryParam("from") == "" || ctx.QueryParam("to") == "" {
-		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "query string parameters 'from', 'to' and 'query' are required"})
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "query string parameters 'from', 'to' and 'q' are required"})
 	}
 
 	q := ctx.QueryParam("q")
@@ -169,7 +169,7 @@ func (c *Controller) SearchSource(ctx echo.Context) error {
 	}
 
 	limit := (to - from + 1)
-	results := []string{}
+	results := []map[string]interface{}{}
 	indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
 
 	if sourceType == "partition" {
@@ -195,10 +195,34 @@ func (c *Controller) SearchSource(ctx echo.Context) error {
 			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 		}
 
-		results = res.Documents
+		log.Debugf("Zahif returned following doucments (%d): %v", len(res.Documents), res.Documents)
+
+		for _, doc := range res.Documents {
+			log.Tracef("Processing result %v", doc)
+			sDoc := strings.Split(doc, ":")
+			filePath := sDoc[1]
+			f, err := os.Stat(filePath)
+			if os.IsNotExist(err) {
+				// file no longer exists
+				continue
+			}
+
+			file := map[string]interface{}{
+				"Name":         f.Name(),
+				"Path":         fmt.Sprintf("/sources/%s/%d%s", partition.Type, partition.ID, strings.Replace(filePath, partition.MountPoint, "", 1)),
+				"LastModified": f.ModTime(),
+				"IsDir":        f.IsDir(),
+				"SizeBytes":    f.Size(),
+				"Extension":    strings.TrimLeft(path.Ext(f.Name()), "."),
+			}
+			results = append(results, file)
+
+		}
 	} else {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
 	}
+
+	log.Tracef("Reutnring search results: %v", results)
 
 	return ctx.JSON(http.StatusOK, results)
 }
