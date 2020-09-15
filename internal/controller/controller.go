@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/labstack/echo/v4"
-	log "github.com/sirupsen/logrus"
-	"gorm.io/gorm"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -14,6 +11,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/labstack/echo/v4"
+	log "github.com/sirupsen/logrus"
+	"gorm.io/gorm"
 
 	"hurracloud.io/jawhar/internal/agent"
 	pb "hurracloud.io/jawhar/internal/agent/proto"
@@ -182,7 +183,7 @@ func (c *Controller) SearchSource(ctx echo.Context) error {
 			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 		}
 
-		log.Debugf("Making Search Request to Zahif: IndexID=%s", indexID)
+		log.Debugf("Making Search Request to Zahif: Query=%s, IndexID=%s", q, indexID)
 		res, err := zahif.Client.SearchIndex(context.Background(), &zahif_pb.SearchIndexRequest{
 			IndexIdentifier: indexID,
 			Query:           q,
