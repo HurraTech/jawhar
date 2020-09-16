@@ -198,10 +198,8 @@ func (c *Controller) SearchSource(ctx echo.Context) error {
 
 		log.Debugf("Zahif returned following doucments (%d): %v", len(res.Documents), res.Documents)
 
-		for _, doc := range res.Documents {
-			log.Tracef("Processing result %v", doc)
-			sDoc := strings.Split(doc, ":")
-			filePath := sDoc[1]
+		for _, filePath := range res.Documents {
+			log.Tracef("Processing result %v", filePath)
 			f, err := os.Stat(filePath)
 			if os.IsNotExist(err) {
 				// file no longer exists
