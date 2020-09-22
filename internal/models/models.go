@@ -12,6 +12,7 @@ type Drive struct {
 	gorm.Model
 	Name         string
 	SerialNumber string
+	Status       string
 	DeviceFile   string
 	DriveType    string
 	SizeBytes    uint64

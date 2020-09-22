@@ -37,6 +37,7 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 		log.Error("Agent Client Failed to call GetDrives: ", err)
 	}
 
+	var attacheDrivesSN []string
 	for _, drive := range response.Drives {
 		// Check if we know this drive
 		log.Tracef("Agent returned drive %v", drive)
@@ -51,9 +52,11 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 		}
 
 		aDrive.Name = drive.Name
+		aDrive.Status = "attached"
 		aDrive.DeviceFile = drive.DeviceFile
 		aDrive.DriveType = drive.Type
 		aDrive.SizeBytes = drive.SizeBytes
+		attacheDrivesSN = append(attacheDrivesSN, aDrive.SerialNumber)
 		database.DB.Save(&aDrive)
 
 		for _, partition := range drive.Partitions {
@@ -115,10 +118,12 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 			database.DB.Save(&aPartition)
 		}
 
+		// Update status of drives no longer attached
+		database.DB.Model(&models.Drive{}).Not(map[string]interface{}{"serial_number": attacheDrivesSN}).Update("status", "detached")
 	}
 
 	var partitions []models.DrivePartition
-	database.DB.Preload("Drive").Find(&partitions)
+	database.DB.Joins("Drive").Where("drive.status = ?", "attached").Find(&partitions)
 	return ctx.JSON(http.StatusOK, partitions)
 }
 
@@ -469,7 +474,12 @@ func (c *Controller) BrowseSource(ctx echo.Context) error {
 
 		files, err := ioutil.ReadDir(targetPath)
 		if err != nil {
-			log.Errorf("Error while reading directory %s: %v", targetPath, err)
+			log.Errorf("Error while reading directory %s: %", targetPath, err)
+			if os.IsPermission(err) {
+				return ctx.JSON(http.StatusUnauthorized, map[string]interface{}{"error": "Access Denied"})
+			} else {
+				return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+			}
 		}
 
 		var response []map[string]interface{}
