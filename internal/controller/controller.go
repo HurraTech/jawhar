@@ -94,14 +94,20 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 				aPartition.Status = "unmountable"
 			}
 
+			// Update index status (if partition has been indexed)
+			var indexProgressRes *zahif_pb.IndexProgressResponse
 			indexID := fmt.Sprintf("%s-%d", aPartition.Type, aPartition.ID)
-			indexProgressRes, err := zahif.Client.IndexProgress(context.Background(), &zahif_pb.IndexProgressRequest{
+			if aPartition.IndexStatus == "" {
+				goto SAVE_PARTITION
+			}
+
+			indexProgressRes, err = zahif.Client.IndexProgress(context.Background(), &zahif_pb.IndexProgressRequest{
 				IndexIdentifier: indexID,
 			})
 
 			if err == nil {
 				aPartition.IndexProgress = indexProgressRes.PercentageDone
-				if aPartition.IndexProgress >= 100 {
+				if aPartition.IndexProgress >= 100 && aPartition.IndexStatus == "creating" {
 					aPartition.IndexStatus = "created"
 				} else if !indexProgressRes.IsRunning && aPartition.IndexStatus == "deleting" {
 					aPartition.IndexStatus = "" // index has been fully deleted
@@ -113,8 +119,15 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 
 				aPartition.IndexTotalDocuments = indexProgressRes.TotalDocuments
 				aPartition.IndexIndexedDocuments = indexProgressRes.IndexedDocuments
+			} else if strings.Contains(err.Error(), "Index does not exist") && aPartition.IndexStatus == "deleting" {
+				aPartition.IndexStatus = ""
+				aPartition.IndexProgress = 0
+				aPartition.IndexTotalDocuments = 0
+				aPartition.IndexIndexedDocuments = 0
+			} else {
+				log.Errorf("Unexpected error: %v", err)
 			}
-
+		SAVE_PARTITION:
 			database.DB.Save(&aPartition)
 		}
 
