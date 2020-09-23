@@ -119,7 +119,7 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 
 				aPartition.IndexTotalDocuments = indexProgressRes.TotalDocuments
 				aPartition.IndexIndexedDocuments = indexProgressRes.IndexedDocuments
-			} else if strings.Contains(err.Error(), "Index does not exist") && aPartition.IndexStatus == "deleting" {
+			} else if strings.Contains(err.Error(), "Index Does Not Exist") && aPartition.IndexStatus == "deleting" {
 				aPartition.IndexStatus = ""
 				aPartition.IndexProgress = 0
 				aPartition.IndexTotalDocuments = 0
@@ -161,6 +161,19 @@ func (c *Controller) MountSource(ctx echo.Context) error {
 			log.Error("Agent Client Failed to call MountDrive: ", err)
 			return ctx.JSON(http.StatusServiceUnavailable, map[string]string{"message": "failed to mount"})
 		}
+
+		// let's ask zahif to resume watching for file change events and index them
+		if partition.IndexStatus != "" && partition.IndexStatus != "paused" {
+			indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
+			log.Debugf("Making Index Request to Zahif: IndexID=%s", indexID)
+			_, err := zahif.Client.StartOrResumeIndex(context.Background(), &zahif_pb.IndexRequest{
+				IndexIdentifier: indexID,
+			})
+			if err != nil {
+				return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": fmt.Sprintf("unexpected error: %s", err)})
+			}
+		}
+
 	} else {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
 	}
@@ -276,7 +289,7 @@ func (c *Controller) IndexSource(ctx echo.Context) error {
 		}
 
 		log.Debugf("Making Batch Index Request to Zahif: IndexID=%s", indexID)
-		_, err := zahif.Client.BatchIndex(context.Background(), &zahif_pb.BatchIndexRequest{
+		_, err := zahif.Client.StartOrResumeIndex(context.Background(), &zahif_pb.IndexRequest{
 			IndexIdentifier: indexID,
 			Target:          partition.MountPoint,
 			ExcludePatterns: excludePatterns,
@@ -355,7 +368,7 @@ func (c *Controller) ResumeIndex(ctx echo.Context) error {
 		}
 
 		log.Debugf("Making Batch Index Request to Zahif: IndexID=%s", indexID)
-		_, err := zahif.Client.BatchIndex(context.Background(), &zahif_pb.BatchIndexRequest{
+		_, err := zahif.Client.StartOrResumeIndex(context.Background(), &zahif_pb.IndexRequest{
 			IndexIdentifier: indexID,
 			Target:          partition.MountPoint,
 			ExcludePatterns: strings.Split(partition.IndexExcludePatterns, "|||"),
@@ -426,6 +439,21 @@ func (c *Controller) UnmountSource(ctx echo.Context) error {
 		} else if result.Error != nil {
 			log.Error("Unexpected error querying DB:", result.Error)
 			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+
+		if partition.IndexStatus == "creating" {
+			return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "please pause or cancel indexing"})
+		} else if partition.IndexStatus != "" {
+			// let's ask zahif stop watching for and indexing file changes
+			indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
+			log.Debugf("Making Stop Index Request to Zahif: IndexID=%s", indexID)
+			_, err := zahif.Client.StopIndex(context.Background(), &zahif_pb.StopIndexRequest{
+				IndexIdentifier: indexID,
+			})
+
+			if err != nil {
+				return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": fmt.Sprintf("unexpected error: %s", err)})
+			}
 		}
 
 		log.Debugf("Unmounting %s", partition.DeviceFile)
