@@ -4,10 +4,6 @@ import (
 	"gorm.io/gorm"
 )
 
-type Source interface {
-	Type()
-}
-
 type Drive struct {
 	gorm.Model
 	Name         string
@@ -40,4 +36,17 @@ type DrivePartition struct {
 	IndexTotalDocuments   int32
 	IndexIndexedDocuments int32
 	IndexExcludePatterns  string
+}
+
+type App struct {
+	gorm.Model
+	UniqueID        string
+	Name            string
+	Description     string
+	LongDescription string
+	Publisher       string
+	Version         string
+	Icon            string
+	Status          string
+	Containers      string
 }

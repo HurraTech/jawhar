@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -578,7 +579,7 @@ func (c *Controller) GetStoreApps(ctx echo.Context) error {
 
 /* POST /apps/:id */
 func (c *Controller) InstallApp(ctx echo.Context) error {
-	resp, err := http.Get(fmt.Sprintf("%s/%s", c.SouqAPI, "apps"))
+	resp, err := http.Get(fmt.Sprintf("%s/%s/%s", c.SouqAPI, "apps", ctx.Param("id")))
 	if err != nil {
 		log.Errorf("Error connecting Souq API: %s", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
@@ -586,6 +587,51 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	souqApp := models.App{}
+	err = json.Unmarshal(body, &souqApp)
+	if err != nil {
+		log.Errorf("Error parsing Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	// Do we have this app already installed?
+	var app models.App
+	result := database.DB.Where("unique_id = ?", ctx.Param("id")).First(&app)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		app = souqApp
+		app.Status = "installing"
+		database.DB.Create(&app)
+	} else if app.Version == souqApp.Version {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "app already installed"})
+	} else {
+		app.Status = "updating"
+		app.Containers = souqApp.Containers
+		database.DB.Save(&app)
+	}
+
+	// Let's ask agent to load the lateast image
+	_, err = agent.Client.LoadImage(context.Background(),
+		&pb.LoadImageRequest{URL: fmt.Sprintf("%s/%s/%s/image", c.SouqAPI, "apps", ctx.Param("id"))})
+	if err != nil {
+		log.Errorf("Error loading image: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	// Let's download all dependant container images
+	for _, image := range strings.Split(app.Containers, ",") {
+		_, err = agent.Client.LoadImage(context.Background(),
+			&pb.LoadImageRequest{URL: fmt.Sprintf("%s/%s/%s/containers/%s", c.SouqAPI, "apps", ctx.Param("id"), image)})
+		if err != nil {
+			log.Errorf("Error loading image: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+
+	}
 
 	return ctx.String(http.StatusOK, string(body))
 }
