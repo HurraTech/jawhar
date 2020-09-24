@@ -27,6 +27,7 @@ import (
 type Controller struct {
 	MountPointsRoot      string
 	SupportedFilesystems map[string]bool
+	SouqAPI              string
 }
 
 /* GET /sources */
@@ -559,4 +560,46 @@ func (c *Controller) BrowseSource(ctx echo.Context) error {
 	default:
 		return ctx.File(targetPath)
 	}
+}
+
+/* GET /app/store */
+func (c *Controller) GetStoreApps(ctx echo.Context) error {
+	resp, err := http.Get(fmt.Sprintf("%s/%s", c.SouqAPI, "apps"))
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+
+	return ctx.String(http.StatusOK, string(body))
+}
+
+/* POST /apps/:id */
+func (c *Controller) InstallApp(ctx echo.Context) error {
+	resp, err := http.Get(fmt.Sprintf("%s/%s", c.SouqAPI, "apps"))
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+
+	return ctx.String(http.StatusOK, string(body))
+}
+
+/* DELETE /apps/:id */
+func (c *Controller) DeleteApp(ctx echo.Context) error {
+	resp, err := http.Get(fmt.Sprintf("%s/%s", c.SouqAPI, "apps"))
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+
+	return ctx.String(http.StatusOK, string(body))
 }
