@@ -51,4 +51,24 @@ type App struct {
 	Containers      string
 	ContainerSpec   string
 	UIPort          int
+	State           AppState
+	Commands        []AppCommand
+}
+
+type AppState struct {
+	gorm.Model
+	AppID uint
+	State string
+}
+
+type AppCommand struct {
+	gorm.Model
+	AppID     uint
+	App 	  App
+	Cmd       string
+	Container string
+	Env       string
+	Args 	  string
+	Output    string
+	Status    string
 }

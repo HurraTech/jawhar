@@ -579,19 +579,244 @@ func (c *Controller) GetStoreApps(ctx echo.Context) error {
 	return ctx.String(http.StatusOK, string(body))
 }
 
+/* GET /commands/:id */
+func (c *Controller) GetCommand(ctx echo.Context) error {
+	var cmd models.AppCommand
+	result := database.DB.Where("id = ?", ctx.Param("id")).First(&cmd)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ctx.JSON(http.StatusNotFound, map[string]string{"message": "command not found"})
+	}
+
+	return ctx.JSON(http.StatusOK, cmd)
+}
+
+
 /* GTE /apps */
 func (c *Controller) ListInstalledApps(ctx echo.Context) error {
 	var apps []models.App
 	database.DB.Find(&apps)
+
 	return ctx.JSON(http.StatusOK, apps)
 }
 
 /* GET /apps/:id */
 func (c *Controller) GetApp(ctx echo.Context) error {
 	var apps models.App
-	database.DB.Where("unique_id = ?", ctx.Param("id")).First(&apps)
+	result := database.DB.Where("unique_id = ?", ctx.Param("id")).First(&apps)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ctx.JSON(http.StatusNotFound, map[string]string{"message": "app is not installed"})
+	}
+
 	return ctx.JSON(http.StatusOK, apps)
 }
+
+/* GET /apps/:id/state */
+func (c *Controller) GetAppState(ctx echo.Context) error {
+	var app models.App
+	log.Debugf("Fetching state for app %s", ctx.Param("id"))
+	result := database.DB.Preload("State").Where("unique_id = ?", ctx.Param("id")).First(&app)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "app is not installed"})
+	}
+
+	return ctx.String(http.StatusOK, app.State.State)
+}
+
+/* POST /apps/:id/state */
+func (c *Controller) StoreAppState(ctx echo.Context) error {
+	var app models.App
+	var state []byte
+	result := database.DB.Preload("State").Where("unique_id = ?", ctx.Param("id")).First(&app)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "app is not installed"})
+	}
+
+	defer ctx.Request().Body.Close()
+	state, err := ioutil.ReadAll(ctx.Request().Body)
+	if err != nil {
+		log.Errorf("Error reding request body: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	jsonMap := make(map[string]interface{})
+	err = json.Unmarshal([]byte(state), &jsonMap)
+	if err != nil {
+		log.Errorf("Error parsing state: %s", err)
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("invalid JSON: %s", err)})
+	}
+
+	log.Debugf("Storing state %s for app %s", state, app.UniqueID)
+
+	app.State.State = string(state)
+	database.DB.Save(&app.State)
+
+	return ctx.String(http.StatusOK, app.State.State)
+}
+
+/* PATCH /apps/:id/state */
+func (c *Controller) PatchAppState(ctx echo.Context) error {
+	var app models.App
+	var state []byte
+	result := database.DB.Preload("State").Where("unique_id = ?", ctx.Param("id")).First(&app)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "app is not installed"})
+	}
+
+	defer ctx.Request().Body.Close()
+	state, err := ioutil.ReadAll(ctx.Request().Body)
+	if err != nil {
+		log.Errorf("Error reding request body: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	patchMap := make(map[string]interface{})
+	err = json.Unmarshal([]byte(state), &patchMap)
+	if err != nil {
+		log.Errorf("Error parsing state: %s", err)
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("invalid JSON: %s", err)})
+	}
+
+	currentState := make(map[string]interface{})
+	err = json.Unmarshal([]byte(app.State.State), &currentState)
+	if err != nil {
+		log.Errorf("Error parsing current state: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	for k, val := range patchMap {
+		currentState[k] = val
+	}
+
+	stateStr, err := json.Marshal(currentState)
+	if err != nil {
+		log.Errorf("Error decoding patched state: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	app.State.State = string(stateStr)
+	database.DB.Save(&app.State)
+
+	return ctx.String(http.StatusOK, app.State.State)
+}
+
+/* POST /apps/:id/:container/command */
+func (c *Controller) ExecAppCommand(ctx echo.Context) error {
+	var app models.App
+	result := database.DB.Where("unique_id = ?", ctx.Param("id")).First(&app)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "app is not installed"})
+	}
+
+	m := echo.Map{}
+	if err := ctx.Bind(&m); err != nil {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("failed to decode payload: %s", err)})
+	}
+
+	if _, ok := m["Env"]; !ok {
+		m["Env"] = map[string]interface{}{}
+	}
+	if _, ok := m["Args"]; !ok {
+		m["Args"] = []string{}
+	}
+
+	if _, ok := m["Cmd"]; !ok {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "Missing required 'Cmd' body parameter"})
+	}
+
+	envStr, err := json.Marshal(m["Env"])
+	if err != nil {
+		log.Errorf("Error parsing command env: %s", err)
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("invalid env JSON: %s", err)})
+	}
+
+	argStr, err := json.Marshal(m["Args"])
+	if err != nil {
+		log.Errorf("Error parsing command args: %s", err)
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("invalid arg JSON: %s", err)})
+	}
+
+	appCommand := models.AppCommand{
+		App: app,
+		Cmd: m["Cmd"].(string),
+		Args: string(argStr),
+		Env: string(envStr),
+		Status: "running",
+	}
+	database.DB.Create(&appCommand)
+
+	res, err := agent.Client.ExecInContainerSpec(context.Background(), &pb.ExecInContainerSpecRequest{
+		Name: app.UniqueID,
+		Context: c.ContainersRoot,
+		Spec: app.ContainerSpec,
+		ContainerName: ctx.Param("container"),
+		Cmd: appCommand.Cmd,
+		Args: appCommand.Args,
+		Env: appCommand.Env,
+	})
+
+	if err != nil {
+		log.Errorf("Error executing command '%s' in %s/%s: %s", appCommand.Cmd, app.UniqueID, ctx.Param("container"), err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	appCommand.Status = "completed"
+	appCommand.Output = res.Output
+	database.DB.Save(&appCommand)
+
+	return ctx.JSON(http.StatusOK, appCommand)
+}
+
+/* PUT /apps/:id/:container */
+func (c *Controller) StartAppContainer(ctx echo.Context) error {
+	var app models.App
+	result := database.DB.Where("unique_id = ?", ctx.Param("id")).First(&app)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "app is not installed"})
+	}
+
+	log.Debugf("Starting container: %s/%s", app.UniqueID, ctx.Param("container"))
+
+	_, err := agent.Client.StartContainerInSpec(context.Background(), &pb.ContainerSpecRequest{
+		Name: app.UniqueID,
+		Context: c.ContainersRoot,
+		Spec: app.ContainerSpec,
+		ContainerName: ctx.Param("container"),
+	})
+
+	if err != nil {
+		log.Errorf("Error starting container in %s/%s: %s",  app.UniqueID, ctx.Param("container"), err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	return ctx.JSON(http.StatusOK, app)
+}
+
+/* DELETE /apps/:id/:container */
+func (c *Controller) StopAppContainer(ctx echo.Context) error {
+	var app models.App
+	result := database.DB.Where("unique_id = ?", ctx.Param("id")).First(&app)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "app is not installed"})
+	}
+
+	log.Debugf("Stopping container: %s/%s", app.UniqueID, ctx.Param("container"))
+
+	_, err := agent.Client.StopContainerInSpec(context.Background(), &pb.ContainerSpecRequest{
+		Name: app.UniqueID,
+		Context: c.ContainersRoot,
+		Spec: app.ContainerSpec,
+		ContainerName: ctx.Param("container"),
+	})
+
+	if err != nil {
+		log.Errorf("Error stopping container in %s/%s: %s",  app.UniqueID, ctx.Param("container"), err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	return ctx.JSON(http.StatusOK, app)
+}
+
+
 
 /* POST /apps/:id */
 func (c *Controller) InstallApp(ctx echo.Context) error {
@@ -620,7 +845,10 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 	result := database.DB.Where("unique_id = ?", ctx.Param("id")).First(&app)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		app = souqApp
+		emptyState := models.AppState{State: "{}"}
 		app.Status = "installing"
+		app.State = emptyState
+		database.DB.Create(&emptyState)
 		database.DB.Create(&app)
 	} else if app.Version == souqApp.Version {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "app already installed"})
@@ -694,6 +922,7 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 			Image:             fmt.Sprintf("%s:%s", app.UniqueID, app.Version),
 			PortMappingSource: uint32(app.UIPort),
 			PortMappingTarget: 3000,
+			Env:               fmt.Sprintf("REACT_APP_AUID=%s", app.UniqueID),
 		})
 
 	if err != nil {

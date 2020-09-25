@@ -20,5 +20,5 @@ func OpenDatabase(dbFile string) {
 }
 
 func Migrate() {
-	DB.AutoMigrate(models.Drive{}, models.DrivePartition{}, models.App{})
+	DB.AutoMigrate(models.Drive{}, models.DrivePartition{}, models.App{}, models.AppState{}, models.AppCommand{})
 }

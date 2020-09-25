@@ -85,7 +85,15 @@ func main() {
 	e.GET("/apps/store", controller.GetStoreApps)
 	e.GET("/apps", controller.ListInstalledApps)
 	e.GET("/apps/:id", controller.GetApp)
+	e.GET("/apps/:id/state", controller.GetAppState)
+	e.POST("/apps/:id/state", controller.StoreAppState)
+	e.PATCH("/apps/:id/state", controller.PatchAppState)
 	e.POST("/apps/:id", controller.InstallApp)
+	e.POST("/apps/:id/:container/command", controller.ExecAppCommand)
+	e.GET("/commands/:id", controller.GetCommand)
 	e.DELETE("/apps/:id", controller.DeleteApp)
+	e.PUT("/apps/:id/:container", controller.StartAppContainer)
+	e.DELETE("/apps/:id/:container", controller.StopAppContainer)
+
 	log.Fatal(e.Start(fmt.Sprintf("%s:%d", options.Host, options.Port)))
 }
