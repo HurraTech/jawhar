@@ -84,6 +84,7 @@ func main() {
 	e.GET("/sources/:type/:id/*", controller.BrowseSource)
 	e.GET("/apps/store", controller.GetStoreApps)
 	e.GET("/apps", controller.ListInstalledApps)
+	e.GET("/apps/:id", controller.GetApp)
 	e.POST("/apps/:id", controller.InstallApp)
 	e.DELETE("/apps/:id", controller.DeleteApp)
 	log.Fatal(e.Start(fmt.Sprintf("%s:%d", options.Host, options.Port)))

@@ -50,4 +50,5 @@ type App struct {
 	Status          string
 	Containers      string
 	ContainerSpec   string
+	UIPort          int
 }
