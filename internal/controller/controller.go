@@ -27,6 +27,7 @@ import (
 
 type Controller struct {
 	MountPointsRoot      string
+	ContainersRoot       string
 	SupportedFilesystems map[string]bool
 	SouqAPI              string
 }
@@ -577,6 +578,12 @@ func (c *Controller) GetStoreApps(ctx echo.Context) error {
 	return ctx.String(http.StatusOK, string(body))
 }
 
+func (c *Controller) ListInstalledApps(ctx echo.Context) error {
+	var apps []models.App
+	database.DB.Find(&apps)
+	return ctx.JSON(http.StatusOK, apps)
+}
+
 /* POST /apps/:id */
 func (c *Controller) InstallApp(ctx echo.Context) error {
 	resp, err := http.Get(fmt.Sprintf("%s/%s/%s", c.SouqAPI, "apps", ctx.Param("id")))
@@ -615,50 +622,104 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 	}
 
 	// Let's ask agent to load the lateast image
+	appImageURL := fmt.Sprintf("%s/%s/%s/image", c.SouqAPI, "apps", ctx.Param("id"))
+	log.Tracef("Downloading app image %s", appImageURL)
 	_, err = agent.Client.LoadImage(context.Background(),
-		&pb.LoadImageRequest{URL: fmt.Sprintf("%s/%s/%s/image", c.SouqAPI, "apps", ctx.Param("id"))})
+		&pb.LoadImageRequest{URL: appImageURL})
 	if err != nil {
 		log.Errorf("Error loading image: %s", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 	}
 
-	// Let's ask agent download all dependant container images
-	for _, image := range strings.Split(app.Containers, ",") {
-		_, err = agent.Client.LoadImage(context.Background(),
-			&pb.LoadImageRequest{URL: fmt.Sprintf("%s/%s/%s/containers/%s", c.SouqAPI, "apps", ctx.Param("id"), image)})
+	// Let's ask agent download and install all dependant container images (if it has any)
+	if strings.TrimSpace(app.Containers) != "" {
+		for _, image := range strings.Split(app.Containers, ",") {
+			log.Tracef("Downloading container image: %s", image)
+			_, err = agent.Client.LoadImage(context.Background(),
+				&pb.LoadImageRequest{URL: fmt.Sprintf("%s/containers/%s", c.SouqAPI, image)})
+			if err != nil {
+				log.Errorf("Error loading image: %s", err)
+				return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+			}
+		}
+
+		// Let's retrieve container.yml file
+		resp, err = http.Get(fmt.Sprintf("%s/%s/%s/containers", c.SouqAPI, "apps", ctx.Param("id")))
 		if err != nil {
-			log.Errorf("Error loading image: %s", err)
+			log.Errorf("Error connecting Souq API: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+
+		defer resp.Body.Close()
+		body, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Errorf("Error connecting Souq API: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+		log.Tracef("Containers spec for app %s is %s", ctx.Param("id"), body)
+		app.ContainerSpec = string(body)
+		database.DB.Save(&app)
+
+		// start sub-containers
+		_, err = agent.Client.RunContainers(context.Background(),
+			&pb.ContainersRequest{Name: app.UniqueID, Context: c.ContainersRoot, Spec: string(body)})
+		if err != nil {
+			log.Errorf("Error starting containers: %s", err)
 			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 		}
 	}
+	app.Status = "installed"
+	database.DB.Save(&app)
 
-	// Let's retrieve container.yml file
-	resp, err := http.Get(fmt.Sprintf("%s/%s/%s/containers", c.SouqAPI, "apps", ctx.Param("id")))
-	if err != nil {
-		log.Errorf("Error connecting Souq API: %s", err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-	}
-
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Errorf("Error connecting Souq API: %s", err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-	}
-
-	return ctx.String(http.StatusOK, string(body))
+	return ctx.JSON(http.StatusOK, app)
 }
 
 /* DELETE /apps/:id */
 func (c *Controller) DeleteApp(ctx echo.Context) error {
-	resp, err := http.Get(fmt.Sprintf("%s/%s", c.SouqAPI, "apps"))
+	var app models.App
+	result := database.DB.Where("unique_id = ?", ctx.Param("id")).First(&app)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "app is not installed"})
+	} else {
+		app.Status = "deleting"
+		database.DB.Save(&app)
+	}
+
+	// Let's ask remove images to clean up space
+	appImageName := fmt.Sprintf("%s:%s", app.UniqueID, app.Version)
+	_, err := agent.Client.UnloadImage(context.Background(), &pb.UnloadImageRequest{Tag: appImageName})
 	if err != nil {
-		log.Errorf("Error connecting Souq API: %s", err)
+		log.Errorf("Error unloading image: %s: %s", appImageName, err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 	}
 
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
+	// Let's ask agent kill and unload all dependant container images (if it has any)
+	if strings.TrimSpace(app.Containers) != "" {
+		// kill containers
+		_, err = agent.Client.RemoveContainers(context.Background(),
+			&pb.ContainersRequest{Name: app.UniqueID, Context: c.ContainersRoot, Spec: app.ContainerSpec})
+		if err != nil {
+			log.Errorf("Error removing containers: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
 
-	return ctx.String(http.StatusOK, string(body))
+		for _, image := range strings.Split(app.Containers, ",") {
+			log.Tracef("Unloading container image: %s", image)
+			_, err = agent.Client.UnloadImage(context.Background(),
+				&pb.UnloadImageRequest{Tag: image})
+			if err != nil {
+				log.Errorf("Error loading image: %s", err)
+				return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+			}
+		}
+
+		if err != nil {
+			log.Errorf("Error starting containers: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+	}
+
+	database.DB.Delete(&app)
+
+	return ctx.JSON(http.StatusOK, app)
 }

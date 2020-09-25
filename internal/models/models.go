@@ -49,4 +49,5 @@ type App struct {
 	Icon            string
 	Status          string
 	Containers      string
+	ContainerSpec   string
 }

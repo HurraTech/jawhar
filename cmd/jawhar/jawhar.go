@@ -17,14 +17,15 @@ import (
 type Options struct {
 	Host            string         `short:"h" long:"host" env:"HOST" description:"Host to bind HTTP server to" default:"127.0.0.1"`
 	Port            int            `short:"p" long:"port" env:"PORT" description:"Port to listen HTTP server" default:"5050"`
-	Database        flags.Filename `short:"d" long:"db" env:"DB" description:"Database filename" default:"jawhar.db"`
+	Database        flags.Filename `short:"d" long:"db" env:"DB" description:"Database filename" default:"./data/jawhar.db"`
 	AgentHost       string         `short:"H" long:"agent_host" env:"AGENT_HOST" description:"Agent Server Host" default:"127.0.0.1"`
 	AgentPort       int            `short:"P" long:"agent_port" env:"AGENT_PORT" description:"Agent Server Port" default:"10000"`
 	ZahifHost       string         `short:"z" long:"zahif_host" env:"ZAHIF_HOST" description:"Zahif Server Host" default:"127.0.0.1"`
 	ZahifPort       int            `short:"o" long:"zahif_port" env:"ZAHIF_PORT" description:"Zahif Server Port" default:"10001"`
 	SouqAPI         string         `short:"s" long:"souq_host" env:"SOUQ_API" description:"Souq API Host" default:"http://127.0.0.1:5060"`
-	MountPointsRoot string         `short:"m" long:"mount_points_root" env:"MOUNT_POINTS_ROOT" description:"Path under which drives should be mounted" default:"./mounts"`
-	Verbose         bool           `short:"v" long:"verbose" description:"Enable verbose logging"`
+	MountPointsRoot string         `short:"m" long:"mount_points_root" env:"MOUNT_POINTS_ROOT" description:"Path under which drives should be mounted" default:"./data/mounts"`
+	ContainersRoot  string         `short:"D" long:"containers_root" env:"containers_root" description:"Containers root context" default:"./data"`
+	Verbose         []bool         `short:"v" long:"verbose" description:"Enable verbose logging"`
 }
 
 var options Options
@@ -43,8 +44,10 @@ func main() {
 		panic(err)
 	}
 
-	if options.Verbose {
+	if len(options.Verbose) == 1 {
 		log.SetLevel(log.DebugLevel)
+	} else if len(options.Verbose) > 1 {
+		log.SetLevel(log.TraceLevel)
 	}
 
 	database.OpenDatabase(string(options.Database))
@@ -57,7 +60,17 @@ func main() {
 		log.Warnf("Could not determine absolute path for mounts directory '%s': %s", options.MountPointsRoot, err)
 		mountRoot = options.MountPointsRoot
 	}
-	controller := &controller.Controller{MountPointsRoot: mountRoot, SupportedFilesystems: supportedFilesystems, SouqAPI: options.SouqAPI}
+
+	containersRoot, err := filepath.Abs(options.ContainersRoot)
+	if err != nil {
+		log.Warnf("Could not determine absolute path for containers directory '%s': %s", options.ContainersRoot, err)
+		containersRoot = options.ContainersRoot
+	}
+
+	controller := &controller.Controller{MountPointsRoot: mountRoot,
+		ContainersRoot:       containersRoot,
+		SupportedFilesystems: supportedFilesystems,
+		SouqAPI:              options.SouqAPI}
 	e := echo.New()
 	e.GET("/sources", controller.GetSources)
 	e.POST("/sources/:type/:id/mount", controller.MountSource)
@@ -70,6 +83,7 @@ func main() {
 	e.GET("/sources/:type/:id", controller.BrowseSource)
 	e.GET("/sources/:type/:id/*", controller.BrowseSource)
 	e.GET("/apps/store", controller.GetStoreApps)
+	e.GET("/apps", controller.ListInstalledApps)
 	e.POST("/apps/:id", controller.InstallApp)
 	e.DELETE("/apps/:id", controller.DeleteApp)
 	log.Fatal(e.Start(fmt.Sprintf("%s:%d", options.Host, options.Port)))
