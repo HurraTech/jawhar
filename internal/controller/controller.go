@@ -622,7 +622,7 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 	}
 
-	// Let's download all dependant container images
+	// Let's ask agent download all dependant container images
 	for _, image := range strings.Split(app.Containers, ",") {
 		_, err = agent.Client.LoadImage(context.Background(),
 			&pb.LoadImageRequest{URL: fmt.Sprintf("%s/%s/%s/containers/%s", c.SouqAPI, "apps", ctx.Param("id"), image)})
@@ -630,7 +630,20 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 			log.Errorf("Error loading image: %s", err)
 			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 		}
+	}
 
+	// Let's retrieve container.yml file
+	resp, err := http.Get(fmt.Sprintf("%s/%s/%s/containers", c.SouqAPI, "apps", ctx.Param("id")))
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 	}
 
 	return ctx.String(http.StatusOK, string(body))
