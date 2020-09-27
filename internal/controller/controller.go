@@ -590,7 +590,6 @@ func (c *Controller) GetCommand(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, cmd)
 }
 
-
 /* GTE /apps */
 func (c *Controller) ListInstalledApps(ctx echo.Context) error {
 	var apps []models.App
@@ -599,15 +598,52 @@ func (c *Controller) ListInstalledApps(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, apps)
 }
 
-/* GET /apps/:id */
-func (c *Controller) GetApp(ctx echo.Context) error {
-	var apps models.App
-	result := database.DB.Where("unique_id = ?", ctx.Param("id")).First(&apps)
+/* GET /apps/:id/webapp/* */
+func (c *Controller) ProxyWebApp(ctx echo.Context) error {
+	var app models.App
+	result := database.DB.Preload("WebApp").Where("unique_id = ?", ctx.Param("id")).First(&app)
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return ctx.JSON(http.StatusNotFound, map[string]string{"message": "app is not installed"})
 	}
 
-	return ctx.JSON(http.StatusOK, apps)
+	targetPort := app.UIPort
+	upstreamURL := fmt.Sprintf("http://localhost:%d/%s", targetPort, ctx.Param("*"))
+	log.Debugf("Proxying request %s to %s", ctx.Param("*"), upstreamURL)
+
+	client := &http.Client{}
+	req := ctx.Request().Clone(ctx.Request().Context())
+	req.URL.Path = strings.Replace(req.URL.Path, fmt.Sprintf("/apps/%s/webapp", app.UniqueID), "", 1)
+	req.URL.Host = fmt.Sprintf("localhost:%d", targetPort)
+	req.URL.Scheme = "http"
+	req.RequestURI = ""
+	req.Header.Add("X-Forwarded-Host", ctx.Request().Host)
+	req.Header.Add("X-Forwarded-For", ctx.Request().RemoteAddr)
+	req.Header.Add("X-Real-IP", ctx.Request().RemoteAddr)
+	req.Header.Add("X-Forwarded-Proto", ctx.Request().URL.Scheme)
+	req.Header.Del("Accept-Encoding")
+	req.Header.Add("X-Origin-Host", ctx.Request().Host)
+
+	res, err := client.Do(req)
+
+	if err != nil {
+		log.Errorf("Error proxying request: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+	defer res.Body.Close()
+
+	log.Debugf("Upstream request: %v", req)
+	return ctx.Stream(http.StatusOK, res.Header.Get("Content-Type"), res.Body)
+}
+
+/* GET /apps/:id */
+func (c *Controller) GetApp(ctx echo.Context) error {
+	var app models.App
+	result := database.DB.Where("unique_id = ?", ctx.Param("id")).First(&app)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return ctx.JSON(http.StatusNotFound, map[string]string{"message": "app is not installed"})
+	}
+
+	return ctx.JSON(http.StatusOK, app)
 }
 
 /* GET /apps/:id/state */
@@ -736,22 +772,22 @@ func (c *Controller) ExecAppCommand(ctx echo.Context) error {
 	}
 
 	appCommand := models.AppCommand{
-		App: app,
-		Cmd: m["Cmd"].(string),
-		Args: string(argStr),
-		Env: string(envStr),
+		App:    app,
+		Cmd:    m["Cmd"].(string),
+		Args:   string(argStr),
+		Env:    string(envStr),
 		Status: "running",
 	}
 	database.DB.Create(&appCommand)
 
 	res, err := agent.Client.ExecInContainerSpec(context.Background(), &pb.ExecInContainerSpecRequest{
-		Name: app.UniqueID,
-		Context: c.ContainersRoot,
-		Spec: app.ContainerSpec,
+		Name:          app.UniqueID,
+		Context:       c.ContainersRoot,
+		Spec:          app.ContainerSpec,
 		ContainerName: ctx.Param("container"),
-		Cmd: appCommand.Cmd,
-		Args: appCommand.Args,
-		Env: appCommand.Env,
+		Cmd:           appCommand.Cmd,
+		Args:          appCommand.Args,
+		Env:           appCommand.Env,
 	})
 
 	if err != nil {
@@ -777,14 +813,14 @@ func (c *Controller) StartAppContainer(ctx echo.Context) error {
 	log.Debugf("Starting container: %s/%s", app.UniqueID, ctx.Param("container"))
 
 	_, err := agent.Client.StartContainerInSpec(context.Background(), &pb.ContainerSpecRequest{
-		Name: app.UniqueID,
-		Context: c.ContainersRoot,
-		Spec: app.ContainerSpec,
+		Name:          app.UniqueID,
+		Context:       c.ContainersRoot,
+		Spec:          app.ContainerSpec,
 		ContainerName: ctx.Param("container"),
 	})
 
 	if err != nil {
-		log.Errorf("Error starting container in %s/%s: %s",  app.UniqueID, ctx.Param("container"), err)
+		log.Errorf("Error starting container in %s/%s: %s", app.UniqueID, ctx.Param("container"), err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 	}
 
@@ -802,21 +838,19 @@ func (c *Controller) StopAppContainer(ctx echo.Context) error {
 	log.Debugf("Stopping container: %s/%s", app.UniqueID, ctx.Param("container"))
 
 	_, err := agent.Client.StopContainerInSpec(context.Background(), &pb.ContainerSpecRequest{
-		Name: app.UniqueID,
-		Context: c.ContainersRoot,
-		Spec: app.ContainerSpec,
+		Name:          app.UniqueID,
+		Context:       c.ContainersRoot,
+		Spec:          app.ContainerSpec,
 		ContainerName: ctx.Param("container"),
 	})
 
 	if err != nil {
-		log.Errorf("Error stopping container in %s/%s: %s",  app.UniqueID, ctx.Param("container"), err)
+		log.Errorf("Error stopping container in %s/%s: %s", app.UniqueID, ctx.Param("container"), err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 	}
 
 	return ctx.JSON(http.StatusOK, app)
 }
-
-
 
 /* POST /apps/:id */
 func (c *Controller) InstallApp(ctx echo.Context) error {
@@ -908,26 +942,46 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 
 	// Start App UI
 	// Find available port
-	listener, err := net.Listen("tcp", ":0")
-	if err != nil {
-		log.Errorf("Failed to find a free port number: %s", err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-	}
-	listener.Close() // we're not really using the listener
-	app.UIPort = listener.Addr().(*net.TCPAddr).Port
-	log.Debugf("Using port %d for UI of app %s", app.UIPort, app.UniqueID)
+	if app.WebApp.Type == "sdk" {
+		listener, err := net.Listen("tcp", ":0")
+		if err != nil {
+			log.Errorf("Failed to find a free port number: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+		listener.Close() // we're not really using the listener
+		app.UIPort = listener.Addr().(*net.TCPAddr).Port
+		log.Debugf("Using port %d for UI of app %s", app.UIPort, app.UniqueID)
 
-	_, err = agent.Client.RunContainer(context.Background(),
-		&pb.RunContainerRequest{Name: app.UniqueID,
-			Image:             fmt.Sprintf("%s:%s", app.UniqueID, app.Version),
-			PortMappingSource: uint32(app.UIPort),
-			PortMappingTarget: 3000,
-			Env:               fmt.Sprintf("REACT_APP_AUID=%s", app.UniqueID),
-		})
+		_, err = agent.Client.RunContainer(context.Background(),
+			&pb.RunContainerRequest{Name: app.UniqueID,
+				Image:             fmt.Sprintf("%s:%s", app.UniqueID, app.Version),
+				PortMappingSource: uint32(app.UIPort),
+				PortMappingTarget: 3000,
+				Env:               fmt.Sprintf("REACT_APP_AUID=%s", app.UniqueID),
+			})
 
-	if err != nil {
-		log.Errorf("Error starting UI container: %s", err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		if err != nil {
+			log.Errorf("Error starting UI container: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+	} else if app.WebApp.Type == "container" {
+
+		res, err := agent.Client.GetContainerPortBindingInSpec(context.Background(),
+			&pb.ContainerPortBindingInSpecRequest{
+				Name:          app.UniqueID,
+				Context:       c.ContainersRoot,
+				Spec:          app.ContainerSpec,
+				ContainerName: app.WebApp.TargetContainer,
+				ContainerPort: uint32(app.WebApp.TargetPort),
+			})
+
+		if err != nil {
+			log.Errorf("Error determining web app port: %s", err)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		}
+
+		app.UIPort = int(res.PortBinding)
+
 	}
 
 	app.Status = "installed"

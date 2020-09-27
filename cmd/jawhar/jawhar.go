@@ -6,6 +6,7 @@ import (
 
 	"github.com/jessevdk/go-flags"
 	"github.com/labstack/echo/v4"
+
 	log "github.com/sirupsen/logrus"
 
 	"hurracloud.io/jawhar/internal/agent"
@@ -22,6 +23,7 @@ type Options struct {
 	AgentPort       int            `short:"P" long:"agent_port" env:"AGENT_PORT" description:"Agent Server Port" default:"10000"`
 	ZahifHost       string         `short:"z" long:"zahif_host" env:"ZAHIF_HOST" description:"Zahif Server Host" default:"127.0.0.1"`
 	ZahifPort       int            `short:"o" long:"zahif_port" env:"ZAHIF_PORT" description:"Zahif Server Port" default:"10001"`
+	SamaaHost       string         `short:"S" long:"samaa_host" env:"SAMAA_HOST" descriptoin:"Samaa Host to allow CORS requests originating from it" default:"localhost:8080"`
 	SouqAPI         string         `short:"s" long:"souq_host" env:"SOUQ_API" description:"Souq API Host" default:"http://127.0.0.1:5060"`
 	MountPointsRoot string         `short:"m" long:"mount_points_root" env:"MOUNT_POINTS_ROOT" description:"Path under which drives should be mounted" default:"./data/mounts"`
 	ContainersRoot  string         `short:"D" long:"containers_root" env:"containers_root" description:"Containers root context" default:"./data"`
@@ -94,6 +96,12 @@ func main() {
 	e.DELETE("/apps/:id", controller.DeleteApp)
 	e.PUT("/apps/:id/:container", controller.StartAppContainer)
 	e.DELETE("/apps/:id/:container", controller.StopAppContainer)
+
+	// web apps reverse proxies
+	e.GET("/apps/:id/webapp/*", controller.ProxyWebApp)
+	e.PUT("/apps/:id/webapp/*", controller.ProxyWebApp)
+	e.POST("/apps/:id/webapp/*", controller.ProxyWebApp)
+	e.DELETE("/apps/:id/webapp/*", controller.ProxyWebApp)
 
 	log.Fatal(e.Start(fmt.Sprintf("%s:%d", options.Host, options.Port)))
 }
