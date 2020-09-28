@@ -892,100 +892,118 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 		database.DB.Save(&app)
 	}
 
-	// Let's ask agent to load the lateast image
-	appImageURL := fmt.Sprintf("%s/%s/%s/image", c.SouqAPI, "apps", ctx.Param("id"))
-	log.Tracef("Downloading app image %s", appImageURL)
-	_, err = agent.Client.LoadImage(context.Background(),
-		&pb.LoadImageRequest{URL: appImageURL})
-	if err != nil {
-		log.Errorf("Error loading UI image: %s: %s", appImageURL, err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-	}
+	go func(appID string) {
+		// Let's ask agent to load the lateast image
+		appImageURL := fmt.Sprintf("%s/%s/%s/image", c.SouqAPI, "apps", appID)
+		log.Tracef("Downloading app image %s", appImageURL)
+		_, err = agent.Client.LoadImage(context.Background(),
+			&pb.LoadImageRequest{URL: appImageURL})
+		if err != nil {
+			log.Errorf("Error loading UI image: %s: %s", appImageURL, err)
+			app.Status = "error"
+			database.DB.Save(&app)
+			return
+		}
 
-	// Let's ask agent download and install all dependant container images (if it has any)
-	if strings.TrimSpace(app.Containers) != "" {
-		for _, image := range strings.Split(app.Containers, ",") {
-			log.Tracef("Downloading container image: %s", image)
-			_, err = agent.Client.LoadImage(context.Background(),
-				&pb.LoadImageRequest{URL: fmt.Sprintf("%s/containers/%s", c.SouqAPI, image)})
+		// Let's ask agent download and install all dependant container images (if it has any)
+		if strings.TrimSpace(app.Containers) != "" {
+			for _, image := range strings.Split(app.Containers, ",") {
+				log.Tracef("Downloading container image: %s", image)
+				_, err = agent.Client.LoadImage(context.Background(),
+					&pb.LoadImageRequest{URL: fmt.Sprintf("%s/containers/%s", c.SouqAPI, image)})
+				if err != nil {
+					log.Errorf("Error loading image: %s: %s", image, err)
+					app.Status = "error"
+					database.DB.Save(&app)
+					return
+				}
+			}
+
+			// Let's retrieve container.yml file
+			resp, err = http.Get(fmt.Sprintf("%s/%s/%s/containers", c.SouqAPI, "apps", appID))
 			if err != nil {
-				log.Errorf("Error loading image: %s: %s", image, err)
-				return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+				log.Errorf("Error connecting Souq API: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+
+			defer resp.Body.Close()
+			body, err = ioutil.ReadAll(resp.Body)
+			if err != nil {
+				log.Errorf("Error connecting Souq API: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+			log.Tracef("Containers spec for app %s is %s", appID, body)
+			app.ContainerSpec = string(body)
+			database.DB.Save(&app)
+
+			// start sub-containers
+			_, err = agent.Client.RunContainerSpec(context.Background(),
+				&pb.ContainerSpecRequest{Name: app.UniqueID, Context: c.ContainersRoot, Spec: string(body)})
+			if err != nil {
+				log.Errorf("Error starting container spec: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
 			}
 		}
 
-		// Let's retrieve container.yml file
-		resp, err = http.Get(fmt.Sprintf("%s/%s/%s/containers", c.SouqAPI, "apps", ctx.Param("id")))
-		if err != nil {
-			log.Errorf("Error connecting Souq API: %s", err)
-			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		// Start App UI
+		// Find available port
+		if app.WebApp.Type == "sdk" {
+			listener, err := net.Listen("tcp", ":0")
+			if err != nil {
+				log.Errorf("Failed to find a free port number: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+			listener.Close() // we're not really using the listener
+			app.UIPort = listener.Addr().(*net.TCPAddr).Port
+			log.Debugf("Using port %d for UI of app %s", app.UIPort, app.UniqueID)
+
+			_, err = agent.Client.RunContainer(context.Background(),
+				&pb.RunContainerRequest{Name: app.UniqueID,
+					Image:             fmt.Sprintf("%s:%s", app.UniqueID, app.Version),
+					PortMappingSource: uint32(app.UIPort),
+					PortMappingTarget: 3000,
+					Env:               fmt.Sprintf("REACT_APP_AUID=%s", app.UniqueID),
+				})
+
+			if err != nil {
+				log.Errorf("Error starting UI container: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+		} else if app.WebApp.Type == "container" {
+
+			res, err := agent.Client.GetContainerPortBindingInSpec(context.Background(),
+				&pb.ContainerPortBindingInSpecRequest{
+					Name:          app.UniqueID,
+					Context:       c.ContainersRoot,
+					Spec:          app.ContainerSpec,
+					ContainerName: app.WebApp.TargetContainer,
+					ContainerPort: uint32(app.WebApp.TargetPort),
+				})
+
+			if err != nil {
+				log.Errorf("Error determining web app port: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+
+			app.UIPort = int(res.PortBinding)
+
 		}
 
-		defer resp.Body.Close()
-		body, err = ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Errorf("Error connecting Souq API: %s", err)
-			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-		}
-		log.Tracef("Containers spec for app %s is %s", ctx.Param("id"), body)
-		app.ContainerSpec = string(body)
+		app.Status = "installed"
 		database.DB.Save(&app)
-
-		// start sub-containers
-		_, err = agent.Client.RunContainerSpec(context.Background(),
-			&pb.ContainerSpecRequest{Name: app.UniqueID, Context: c.ContainersRoot, Spec: string(body)})
-		if err != nil {
-			log.Errorf("Error starting container spec: %s", err)
-			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-		}
-	}
-
-	// Start App UI
-	// Find available port
-	if app.WebApp.Type == "sdk" {
-		listener, err := net.Listen("tcp", ":0")
-		if err != nil {
-			log.Errorf("Failed to find a free port number: %s", err)
-			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-		}
-		listener.Close() // we're not really using the listener
-		app.UIPort = listener.Addr().(*net.TCPAddr).Port
-		log.Debugf("Using port %d for UI of app %s", app.UIPort, app.UniqueID)
-
-		_, err = agent.Client.RunContainer(context.Background(),
-			&pb.RunContainerRequest{Name: app.UniqueID,
-				Image:             fmt.Sprintf("%s:%s", app.UniqueID, app.Version),
-				PortMappingSource: uint32(app.UIPort),
-				PortMappingTarget: 3000,
-				Env:               fmt.Sprintf("REACT_APP_AUID=%s", app.UniqueID),
-			})
-
-		if err != nil {
-			log.Errorf("Error starting UI container: %s", err)
-			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-		}
-	} else if app.WebApp.Type == "container" {
-
-		res, err := agent.Client.GetContainerPortBindingInSpec(context.Background(),
-			&pb.ContainerPortBindingInSpecRequest{
-				Name:          app.UniqueID,
-				Context:       c.ContainersRoot,
-				Spec:          app.ContainerSpec,
-				ContainerName: app.WebApp.TargetContainer,
-				ContainerPort: uint32(app.WebApp.TargetPort),
-			})
-
-		if err != nil {
-			log.Errorf("Error determining web app port: %s", err)
-			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-		}
-
-		app.UIPort = int(res.PortBinding)
-
-	}
-
-	app.Status = "installed"
-	database.DB.Save(&app)
+	}(app.UniqueID)
 
 	return ctx.JSON(http.StatusOK, app)
 }
@@ -1001,45 +1019,51 @@ func (c *Controller) DeleteApp(ctx echo.Context) error {
 		database.DB.Save(&app)
 	}
 
-	// Stop UI container
-	_, err := agent.Client.KillContainer(context.Background(),
-		&pb.KillContainerRequest{Name: app.UniqueID})
+	go func() {
+		// Stop UI container
+		_, err := agent.Client.KillContainer(context.Background(),
+			&pb.KillContainerRequest{Name: app.UniqueID})
 
-	if err != nil {
-		log.Errorf("Error stopping UI container: %s", err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-	}
-
-	// Let's ask agent kill and unload all dependant container images (if it has any)
-	if strings.TrimSpace(app.Containers) != "" {
-		// kill containers
-		_, err = agent.Client.RemoveContainerSpec(context.Background(),
-			&pb.ContainerSpecRequest{Name: app.UniqueID, Context: c.ContainersRoot, Spec: app.ContainerSpec})
 		if err != nil {
-			log.Errorf("Error removing container spec for app %s: %s", app.UniqueID, err)
-			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+			log.Errorf("Error stopping UI container: %s", err)
+			app.Status = "error"
+			database.DB.Save(&app)
 		}
 
-		for _, image := range strings.Split(app.Containers, ",") {
-			log.Tracef("Unloading container image: %s", image)
-			_, err = agent.Client.UnloadImage(context.Background(),
-				&pb.UnloadImageRequest{Tag: image})
+		// Let's ask agent kill and unload all dependant container images (if it has any)
+		if strings.TrimSpace(app.Containers) != "" {
+			// kill containers
+			_, err = agent.Client.RemoveContainerSpec(context.Background(),
+				&pb.ContainerSpecRequest{Name: app.UniqueID, Context: c.ContainersRoot, Spec: app.ContainerSpec})
 			if err != nil {
-				log.Errorf("Error unloading image: %s: %s", image, err)
-				return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+				log.Errorf("Error removing container spec for app %s: %s", app.UniqueID, err)
+				app.Status = "error"
+				database.DB.Save(&app)
+			}
+
+			for _, image := range strings.Split(app.Containers, ",") {
+				log.Tracef("Unloading container image: %s", image)
+				_, err = agent.Client.UnloadImage(context.Background(),
+					&pb.UnloadImageRequest{Tag: image})
+				if err != nil {
+					log.Errorf("Error unloading image: %s: %s", image, err)
+					app.Status = "error"
+					database.DB.Save(&app)
+				}
 			}
 		}
-	}
 
-	// Let's ask remove images to clean up space
-	appImageName := fmt.Sprintf("%s:%s", app.UniqueID, app.Version)
-	_, err = agent.Client.UnloadImage(context.Background(), &pb.UnloadImageRequest{Tag: appImageName})
-	if err != nil {
-		log.Errorf("Error unloading image: %s: %s", appImageName, err)
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
-	}
+		// Let's ask remove images to clean up space
+		appImageName := fmt.Sprintf("%s:%s", app.UniqueID, app.Version)
+		_, err = agent.Client.UnloadImage(context.Background(), &pb.UnloadImageRequest{Tag: appImageName})
+		if err != nil {
+			log.Errorf("Error unloading image: %s: %s", appImageName, err)
+			app.Status = "error"
+			database.DB.Save(&app)
+		}
 
-	database.DB.Delete(&app)
+		database.DB.Delete(&app)
+	}()
 
 	return ctx.JSON(http.StatusOK, app)
 }
