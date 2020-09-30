@@ -23,8 +23,7 @@ type Options struct {
 	AgentPort       int            `short:"P" long:"agent_port" env:"AGENT_PORT" description:"Agent Server Port" default:"10000"`
 	ZahifHost       string         `short:"z" long:"zahif_host" env:"ZAHIF_HOST" description:"Zahif Server Host" default:"127.0.0.1"`
 	ZahifPort       int            `short:"o" long:"zahif_port" env:"ZAHIF_PORT" description:"Zahif Server Port" default:"10001"`
-	SouqAPI         string         `short:"s" long:"souq_host" env:"SOUQ_API" description:"Souq API Host" default:"http://127.0.0.1:5060"`
-	SouqAuth        bool           `short:"A" long:"souq_auth" env:"SOUQ_AUTH" description:"Whether Souq API is protected by Basic Auth"`
+	SouqAPI         string         `short:"s" long:"souq_host" env:"SOUQ_API" description:"Souq API Host" default:"https://souq.hurracloud.io"`
 	MountPointsRoot string         `short:"m" long:"mount_points_root" env:"MOUNT_POINTS_ROOT" description:"Path under which drives should be mounted" default:"./data/mounts"`
 	ContainersRoot  string         `short:"D" long:"containers_root" env:"containers_root" description:"Containers root context" default:"./data"`
 	Verbose         []bool         `short:"v" long:"verbose" description:"Enable verbose logging"`
@@ -72,7 +71,10 @@ func main() {
 	controller := &controller.Controller{MountPointsRoot: mountRoot,
 		ContainersRoot:       containersRoot,
 		SupportedFilesystems: supportedFilesystems,
-		SouqAPI:              options.SouqAPI}
+		SouqAPI:              options.SouqAPI,
+		SouqUsername: "HURRANET",
+		SouqPassword: "bSdh~e9J:FTbLS#w",
+	}
 	e := echo.New()
 	e.GET("/sources", controller.GetSources)
 	e.POST("/sources/:type/:id/mount", controller.MountSource)

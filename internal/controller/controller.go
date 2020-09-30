@@ -31,6 +31,8 @@ type Controller struct {
 	ContainersRoot       string
 	SupportedFilesystems map[string]bool
 	SouqAPI              string
+	SouqUsername 		 string
+	SouqPassword 		 string
 }
 
 /* GET /sources */
@@ -567,7 +569,16 @@ func (c *Controller) BrowseSource(ctx echo.Context) error {
 
 /* GET /app/store */
 func (c *Controller) GetStoreApps(ctx echo.Context) error {
-	resp, err := http.Get(fmt.Sprintf("%s/%s", c.SouqAPI, "apps"))
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/%s", c.SouqAPI, "apps"), nil)
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+
+	req.SetBasicAuth(c.SouqUsername, c.SouqPassword)
+    client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Errorf("Error connecting Souq API: %s", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
@@ -854,7 +865,16 @@ func (c *Controller) StopAppContainer(ctx echo.Context) error {
 
 /* POST /apps/:id */
 func (c *Controller) InstallApp(ctx echo.Context) error {
-	resp, err := http.Get(fmt.Sprintf("%s/%s/%s", c.SouqAPI, "apps", ctx.Param("id")))
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/apps/%s", c.SouqAPI, ctx.Param("id")), nil)
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+
+	req.SetBasicAuth(c.SouqUsername, c.SouqPassword)
+    client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Errorf("Error connecting Souq API: %s", err)
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
@@ -892,12 +912,12 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 		database.DB.Save(&app)
 	}
 
-	go func(appID string) {
+	go func() {
 		// Let's ask agent to load the lateast image
-		appImageURL := fmt.Sprintf("%s/%s/%s/image", c.SouqAPI, "apps", appID)
-		log.Tracef("Downloading app image %s", appImageURL)
+		appImageURL := fmt.Sprintf("%s/apps/%s/image", c.SouqAPI, app.UniqueID)
+		log.Debugf("Downloading UI image %s", appImageURL)
 		_, err = agent.Client.LoadImage(context.Background(),
-			&pb.LoadImageRequest{URL: appImageURL})
+			&pb.LoadImageRequest{URL: appImageURL, Username: c.SouqUsername, Password: c.SouqPassword})
 		if err != nil {
 			log.Errorf("Error loading UI image: %s: %s", appImageURL, err)
 			app.Status = "error"
@@ -910,7 +930,7 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 			for _, image := range strings.Split(app.Containers, ",") {
 				log.Tracef("Downloading container image: %s", image)
 				_, err = agent.Client.LoadImage(context.Background(),
-					&pb.LoadImageRequest{URL: fmt.Sprintf("%s/containers/%s", c.SouqAPI, image)})
+					&pb.LoadImageRequest{URL: fmt.Sprintf("%s/containers/%s", c.SouqAPI, image),  Username: c.SouqUsername, Password: c.SouqPassword})
 				if err != nil {
 					log.Errorf("Error loading image: %s: %s", image, err)
 					app.Status = "error"
@@ -920,7 +940,17 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 			}
 
 			// Let's retrieve container.yml file
-			resp, err = http.Get(fmt.Sprintf("%s/%s/%s/containers", c.SouqAPI, "apps", appID))
+			req, err := http.NewRequest("GET", fmt.Sprintf("%s/apps/%s/containers", c.SouqAPI, app.UniqueID), nil)
+			if err != nil {
+				log.Errorf("Error retrieving %s/containers.yml: %s", app.UniqueID, err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+
+			req.SetBasicAuth(c.SouqUsername, c.SouqPassword)
+			client := &http.Client{}
+			resp, err := client.Do(req)
 			if err != nil {
 				log.Errorf("Error connecting Souq API: %s", err)
 				app.Status = "error"
@@ -936,7 +966,8 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 				database.DB.Save(&app)
 				return
 			}
-			log.Tracef("Containers spec for app %s is %s", appID, body)
+
+			log.Tracef("Containers spec for app %s is %s", app.UniqueID, body)
 			app.ContainerSpec = string(body)
 			database.DB.Save(&app)
 
@@ -1003,7 +1034,7 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 
 		app.Status = "installed"
 		database.DB.Save(&app)
-	}(app.UniqueID)
+	}()
 
 	return ctx.JSON(http.StatusOK, app)
 }
