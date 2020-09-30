@@ -31,8 +31,8 @@ type Controller struct {
 	ContainersRoot       string
 	SupportedFilesystems map[string]bool
 	SouqAPI              string
-	SouqUsername 		 string
-	SouqPassword 		 string
+	SouqUsername         string
+	SouqPassword         string
 }
 
 /* GET /sources */
@@ -521,7 +521,7 @@ func (c *Controller) BrowseSource(ctx echo.Context) error {
 
 		files, err := ioutil.ReadDir(targetPath)
 		if err != nil {
-			log.Errorf("Error while reading directory %s: %", targetPath, err)
+			log.Errorf("Error while reading directory %s: %s", targetPath, err)
 			if os.IsPermission(err) {
 				return ctx.JSON(http.StatusUnauthorized, map[string]interface{}{"error": "Access Denied"})
 			} else {
@@ -575,9 +575,8 @@ func (c *Controller) GetStoreApps(ctx echo.Context) error {
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 	}
 
-
 	req.SetBasicAuth(c.SouqUsername, c.SouqPassword)
-    client := &http.Client{}
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Errorf("Error connecting Souq API: %s", err)
@@ -871,9 +870,8 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 	}
 
-
 	req.SetBasicAuth(c.SouqUsername, c.SouqPassword)
-    client := &http.Client{}
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Errorf("Error connecting Souq API: %s", err)
@@ -930,7 +928,7 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 			for _, image := range strings.Split(app.Containers, ",") {
 				log.Tracef("Downloading container image: %s", image)
 				_, err = agent.Client.LoadImage(context.Background(),
-					&pb.LoadImageRequest{URL: fmt.Sprintf("%s/containers/%s", c.SouqAPI, image),  Username: c.SouqUsername, Password: c.SouqPassword})
+					&pb.LoadImageRequest{URL: fmt.Sprintf("%s/containers/%s", c.SouqAPI, image), Username: c.SouqUsername, Password: c.SouqPassword})
 				if err != nil {
 					log.Errorf("Error loading image: %s: %s", image, err)
 					app.Status = "error"
