@@ -25,7 +25,7 @@ type Options struct {
 	ZahifPort       int            `short:"o" long:"zahif_port" env:"ZAHIF_PORT" description:"Zahif Server Port" default:"10001"`
 	SouqAPI         string         `short:"s" long:"souq_host" env:"SOUQ_API" description:"Souq API Host" default:"https://souq.hurracloud.io"`
 	MountPointsRoot string         `short:"m" long:"mount_points_root" env:"MOUNT_POINTS_ROOT" description:"Path under which drives should be mounted" default:"./data/mounts"`
-	ContainersRoot  string         `short:"D" long:"containers_root" env:"containers_root" description:"Containers root context" default:"./data"`
+	ContainersRoot  string         `short:"D" long:"containers_root" env:"CONTAINERS_ROOT" description:"Containers root context" default:"./data"`
 	Verbose         []bool         `short:"v" long:"verbose" description:"Enable verbose logging"`
 }
 
