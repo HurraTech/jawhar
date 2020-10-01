@@ -2,14 +2,16 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/jessevdk/go-flags"
 	"github.com/labstack/echo/v4"
-
 	log "github.com/sirupsen/logrus"
 
 	"hurracloud.io/jawhar/internal/agent"
+	"hurracloud.io/jawhar/internal/background"
 	"hurracloud.io/jawhar/internal/controller"
 	"hurracloud.io/jawhar/internal/database"
 	"hurracloud.io/jawhar/internal/zahif"
@@ -23,20 +25,14 @@ type Options struct {
 	AgentPort       int            `short:"P" long:"agent_port" env:"AGENT_PORT" description:"Agent Server Port" default:"10000"`
 	ZahifHost       string         `short:"z" long:"zahif_host" env:"ZAHIF_HOST" description:"Zahif Server Host" default:"127.0.0.1"`
 	ZahifPort       int            `short:"o" long:"zahif_port" env:"ZAHIF_PORT" description:"Zahif Server Port" default:"10001"`
-	SouqAPI         string         `short:"s" long:"souq_api" env:"SOUQ_API" description:"Souq API Host" default:"https://souq.hurracloud.io"`
+	SouqAPI         string         `short:"S" long:"souq_api" env:"SOUQ_API" description:"Souq API Host" default:"https://souq.hurracloud.io"`
 	MountPointsRoot string         `short:"m" long:"mount_points_root" env:"MOUNT_POINTS_ROOT" description:"Path under which drives should be mounted" default:"./data/mounts"`
 	ContainersRoot  string         `short:"D" long:"containers_root" env:"CONTAINERS_ROOT" description:"Containers root context" default:"./data"`
+	InternalStorage string         `short:"s" long:"internal_storage" env:"INTERNAL_STORAGE" description:"Path to use for 'Internal Storage'" default:"./data/storage"`
 	Verbose         []bool         `short:"v" long:"verbose" description:"Enable verbose logging"`
 }
 
 var options Options
-
-var supportedFilesystems = map[string]bool{
-	"vfat": true,
-	"ext4": true,
-	"ext3": true,
-	"ntfs": true,
-}
 
 func main() {
 	_, err := flags.Parse(&options)
@@ -68,12 +64,39 @@ func main() {
 		containersRoot = options.ContainersRoot
 	}
 
+	internalStorage, err := filepath.Abs(options.InternalStorage)
+	if err != nil {
+		log.Warnf("Could not determine absolute path for internal storage directory '%s': %s", options.InternalStorage, err)
+		containersRoot = options.InternalStorage
+	}
+
+	if _, err := os.Stat(internalStorage); os.IsNotExist(err) {
+		err := os.MkdirAll(internalStorage, 0755)
+		if err != nil {
+			log.Fatalf("Could not create internal storage directory: %s: %s", internalStorage, err)
+		}
+	}
+
+	// Schedule job to update sources (disks and index progress) every 5 seconds
+	ticker := time.NewTicker(5 * time.Second)
+	quit := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				background.UpdateSources(internalStorage)
+			case <-quit:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+
 	controller := &controller.Controller{MountPointsRoot: mountRoot,
-		ContainersRoot:       containersRoot,
-		SupportedFilesystems: supportedFilesystems,
-		SouqAPI:              options.SouqAPI,
-		SouqUsername:         "HURRANET",
-		SouqPassword:         "bSdh~e9J:FTbLS#w",
+		ContainersRoot: containersRoot,
+		SouqAPI:        options.SouqAPI,
+		SouqUsername:   "HURRANET",
+		SouqPassword:   "bSdh~e9J:FTbLS#w",
 	}
 	e := echo.New()
 	e.GET("/sources", controller.GetSources)

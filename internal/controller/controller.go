@@ -29,6 +29,7 @@ import (
 type Controller struct {
 	MountPointsRoot      string
 	ContainersRoot       string
+	InternalStoragePath  string
 	SupportedFilesystems map[string]bool
 	SouqAPI              string
 	SouqUsername         string
@@ -37,112 +38,9 @@ type Controller struct {
 
 /* GET /sources */
 func (c *Controller) GetSources(ctx echo.Context) error {
-
-	response, err := agent.Client.GetDrives(context.Background(), &pb.GetDrivesRequest{})
-	if err != nil {
-		log.Error("Agent Client Failed to call GetDrives: ", err)
-	}
-
-	var attacheDrivesSN []string
-	for _, drive := range response.Drives {
-		// Check if we know this drive
-		log.Tracef("Agent returned drive %v", drive)
-		var aDrive models.Drive
-		result := database.DB.Where("serial_number = ?", drive.SerialNumber).First(&aDrive)
-
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			// First time we see this drive
-			log.Debugf("First time we see drive with serial number: %v. Creating a record.", drive.SerialNumber)
-			aDrive = models.Drive{SerialNumber: drive.SerialNumber}
-			database.DB.Create(&aDrive)
-		}
-
-		aDrive.Name = drive.Name
-		aDrive.Status = "attached"
-		aDrive.DeviceFile = drive.DeviceFile
-		aDrive.DriveType = drive.Type
-		aDrive.SizeBytes = drive.SizeBytes
-		attacheDrivesSN = append(attacheDrivesSN, aDrive.SerialNumber)
-		database.DB.Save(&aDrive)
-
-		for _, partition := range drive.Partitions {
-			// Check if we know this partition
-			log.Tracef("Agent returned partition %v", partition)
-			var aPartition models.DrivePartition
-			unique_name := fmt.Sprintf("%s-%s", drive.SerialNumber, partition.Name)
-			result := database.DB.Where("name = ?", unique_name).First(&aPartition)
-
-			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-				// First time we see this partition, create it
-				log.Debugf("First time we see partition with this name: %v. Creating a record.", unique_name)
-				aPartition = models.DrivePartition{Name: unique_name}
-				aPartition.Drive = aDrive
-				if partition.Label != "" {
-					aPartition.Caption = partition.Label
-				} else {
-					aPartition.Caption = partition.Name
-				}
-				database.DB.Create(&aPartition)
-			}
-
-			aPartition.DeviceFile = partition.DeviceFile
-			aPartition.SizeBytes = partition.SizeBytes
-			aPartition.AvailableBytes = partition.AvailableBytes
-			aPartition.MountPoint = partition.MountPoint
-			aPartition.Label = partition.Label
-			aPartition.IsReadOnly = partition.IsReadOnly
-			aPartition.Filesystem = partition.Filesystem
-			if partition.MountPoint != "" {
-				aPartition.Status = "mounted"
-			} else if aPartition.Filesystem != "" && c.SupportedFilesystems[aPartition.Filesystem] {
-				aPartition.Status = "unmounted"
-			} else {
-				aPartition.Status = "unmountable"
-			}
-
-			// Update index status (if partition has been indexed)
-			var indexProgressRes *zahif_pb.IndexProgressResponse
-			indexID := fmt.Sprintf("%s-%d", aPartition.Type, aPartition.ID)
-			if aPartition.IndexStatus == "" {
-				goto SAVE_PARTITION
-			}
-
-			indexProgressRes, err = zahif.Client.IndexProgress(context.Background(), &zahif_pb.IndexProgressRequest{
-				IndexIdentifier: indexID,
-			})
-
-			if err == nil {
-				aPartition.IndexProgress = indexProgressRes.PercentageDone
-				if aPartition.IndexProgress >= 100 && (aPartition.IndexStatus == "creating" || aPartition.IndexStatus == "resuming") {
-					aPartition.IndexStatus = "created"
-				} else if !indexProgressRes.IsRunning && aPartition.IndexStatus == "deleting" {
-					aPartition.IndexStatus = "" // index has been fully deleted
-				} else if !indexProgressRes.IsRunning && aPartition.IndexStatus == "pausing" {
-					aPartition.IndexStatus = "paused"
-				} else if indexProgressRes.IsRunning && aPartition.IndexStatus == "resuming" {
-					aPartition.IndexStatus = "creating"
-				}
-
-				aPartition.IndexTotalDocuments = indexProgressRes.TotalDocuments
-				aPartition.IndexIndexedDocuments = indexProgressRes.IndexedDocuments
-			} else if strings.Contains(err.Error(), "Index Does Not Exist") && aPartition.IndexStatus == "deleting" {
-				aPartition.IndexStatus = ""
-				aPartition.IndexProgress = 0
-				aPartition.IndexTotalDocuments = 0
-				aPartition.IndexIndexedDocuments = 0
-			} else {
-				log.Errorf("Unexpected error: %v", err)
-			}
-		SAVE_PARTITION:
-			database.DB.Save(&aPartition)
-		}
-
-		// Update status of drives no longer attached
-		database.DB.Model(&models.Drive{}).Not(map[string]interface{}{"serial_number": attacheDrivesSN}).Update("status", "detached")
-	}
-
 	var partitions []models.DrivePartition
-	database.DB.Joins("Drive").Where("drive.status = ?", "attached").Find(&partitions)
+	database.DB.Order("order_number asc").Order("drive_partitions.id asc").Joins("Drive").Where("drive.status = ?", "attached").Find(&partitions)
+
 	return ctx.JSON(http.StatusOK, partitions)
 }
 
@@ -150,7 +48,7 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 func (c *Controller) MountSource(ctx echo.Context) error {
 	sourceType := ctx.Param("type")
 	sourceId := ctx.Param("id")
-	if sourceType == "partition" {
+	if sourceType == "partition" || sourceType == "internal" {
 		var partition models.DrivePartition
 		result := database.DB.Where("id = ?", sourceId).First(&partition)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -210,7 +108,7 @@ func (c *Controller) SearchSource(ctx echo.Context) error {
 	results := []map[string]interface{}{}
 	indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
 
-	if sourceType == "partition" {
+	if sourceType == "partition" || sourceType == "internal" {
 		var partition models.DrivePartition
 		result := database.DB.Where("id = ?", sourceId).First(&partition)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -282,7 +180,7 @@ func (c *Controller) IndexSource(ctx echo.Context) error {
 		log.Debugf("ExcludePatterns is: %v", excludePatterns)
 	}
 
-	if sourceType == "partition" {
+	if sourceType == "partition" || sourceType == "internal" {
 		var partition models.DrivePartition
 		result := database.DB.Where("id = ?", sourceId).First(&partition)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -323,7 +221,7 @@ func (c *Controller) DeleteIndex(ctx echo.Context) error {
 	sourceId := ctx.Param("id")
 	indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
 
-	if sourceType == "partition" {
+	if sourceType == "partition" || sourceType == "internal" {
 		var partition models.DrivePartition
 		result := database.DB.Where("id = ?", sourceId).First(&partition)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -361,7 +259,7 @@ func (c *Controller) ResumeIndex(ctx echo.Context) error {
 	sourceId := ctx.Param("id")
 	indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
 
-	if sourceType == "partition" {
+	if sourceType == "partition" || sourceType == "internal" {
 		var partition models.DrivePartition
 		result := database.DB.Where("id = ?", sourceId).First(&partition)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -401,7 +299,7 @@ func (c *Controller) PauseIndex(ctx echo.Context) error {
 	sourceId := ctx.Param("id")
 	indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
 
-	if sourceType == "partition" {
+	if sourceType == "partition" || sourceType == "internal" {
 		var partition models.DrivePartition
 		result := database.DB.Where("id = ?", sourceId).First(&partition)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -437,7 +335,7 @@ func (c *Controller) PauseIndex(ctx echo.Context) error {
 func (c *Controller) UnmountSource(ctx echo.Context) error {
 	sourceType := ctx.Param("type")
 	sourceId := ctx.Param("id")
-	if sourceType == "partition" {
+	if sourceType == "partition" || sourceType == "internal" {
 		var partition models.DrivePartition
 		result := database.DB.Where("id = ?", sourceId).First(&partition)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -484,7 +382,7 @@ func (c *Controller) BrowseSource(ctx echo.Context) error {
 	}
 	var targetPath string
 	var source models.DrivePartition
-	if sourceType == "partition" {
+	if sourceType == "partition" || sourceType == "internal" {
 		result := database.DB.Where("id = ?", sourceID).First(&source)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return ctx.JSON(http.StatusNotFound, result.Error)
@@ -504,6 +402,9 @@ func (c *Controller) BrowseSource(ctx echo.Context) error {
 	stat, err := os.Stat(targetPath)
 	if os.IsNotExist(err) {
 		return ctx.JSON(http.StatusNotFound, map[string]string{"message": fmt.Sprintf("%s: no such file or direcrory", requestedPath)})
+	} else if err != nil {
+		log.Errorf("Could not stat directory: %s: %s", targetPath, err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
 	}
 
 	rel, err := filepath.Rel(source.MountPoint, targetPath)

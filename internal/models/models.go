@@ -18,6 +18,7 @@ type Drive struct {
 
 type DrivePartition struct {
 	gorm.Model
+	OrderNumber           int `gorm:"default:1"`
 	Name                  string
 	Caption               string
 	DriveID               int
