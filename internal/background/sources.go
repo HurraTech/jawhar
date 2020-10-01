@@ -26,10 +26,16 @@ var systemPartitions = map[string]bool{
 }
 
 var systemDevices = map[string]bool{
+	// RPI
 	"/dev/mmcblk0p1": true,
 	"/dev/mmcblk0p2": true,
 	"/dev/mmcblk0p3": true,
 	"/dev/mmcblk0p4": true,
+
+	// Thinkpad
+	"/dev/nvme0n1p2": true,
+	"/dev/nvme0n1p3": true,
+	"/dev/nvme0n1p4": true,
 }
 
 var supportedFilesystems = map[string]bool{
@@ -95,6 +101,10 @@ func retrieveSources() error {
 					aPartition.Caption = partition.Name
 				}
 				database.DB.Create(&aPartition)
+			}
+
+			if systemPartitions[partition.MountPoint] || systemDevices[partition.DeviceFile] {
+				aPartition.Type = "system"
 			}
 
 			aPartition.DeviceFile = partition.DeviceFile

@@ -77,7 +77,8 @@ func main() {
 		}
 	}
 
-	// Schedule job to update sources (disks and index progress) every 5 seconds
+	// Run now and schedule job to update sources (disks and index progress) every 5 seconds
+	background.UpdateSources(internalStorage)
 	ticker := time.NewTicker(5 * time.Second)
 	quit := make(chan struct{})
 	go func() {

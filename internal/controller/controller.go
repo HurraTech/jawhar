@@ -39,7 +39,11 @@ type Controller struct {
 /* GET /sources */
 func (c *Controller) GetSources(ctx echo.Context) error {
 	var partitions []models.DrivePartition
-	database.DB.Order("order_number asc").Order("drive_partitions.id asc").Joins("Drive").Where("drive.status = ?", "attached").Find(&partitions)
+	database.DB.
+		Order("order_number asc").Order("drive_partitions.id asc").Joins("Drive").
+		Where("drive.status = ?", "attached").
+		Where("type <> ?", "system").
+		Find(&partitions)
 
 	return ctx.JSON(http.StatusOK, partitions)
 }
