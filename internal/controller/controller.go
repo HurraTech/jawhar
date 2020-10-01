@@ -113,7 +113,7 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 
 			if err == nil {
 				aPartition.IndexProgress = indexProgressRes.PercentageDone
-				if aPartition.IndexProgress >= 100 && aPartition.IndexStatus == "creating" {
+				if aPartition.IndexProgress >= 100 && (aPartition.IndexStatus == "creating" || aPartition.IndexStatus == "resuming") {
 					aPartition.IndexStatus = "created"
 				} else if !indexProgressRes.IsRunning && aPartition.IndexStatus == "deleting" {
 					aPartition.IndexStatus = "" // index has been fully deleted
