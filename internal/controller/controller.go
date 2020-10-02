@@ -39,7 +39,7 @@ type Controller struct {
 
 /* GET /sources */
 func (c *Controller) GetSources(ctx echo.Context) error {
-	if ctx.QueryParam("refresh") == "y" {
+	if ctx.QueryParam("refresh") == "true" {
 		system.UpdateSources(c.InternalStoragePath)
 	}
 
