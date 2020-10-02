@@ -7,7 +7,7 @@ import (
 type Drive struct {
 	gorm.Model
 	Name         string
-	SerialNumber string
+	SerialNumber string `gorm:"index"`
 	Status       string
 	DeviceFile   string
 	DriveType    string
@@ -41,7 +41,7 @@ type DrivePartition struct {
 
 type App struct {
 	gorm.Model
-	UniqueID        string
+	UniqueID        string `gorm:"index"`
 	Name            string
 	Description     string
 	LongDescription string

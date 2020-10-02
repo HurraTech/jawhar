@@ -39,6 +39,7 @@ type Controller struct {
 
 /* GET /sources */
 func (c *Controller) GetSources(ctx echo.Context) error {
+
 	system.UpdateSources(c.InternalStoragePath)
 
 	var partitions []models.DrivePartition
