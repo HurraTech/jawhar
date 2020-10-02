@@ -1,4 +1,4 @@
-package background
+package manager
 
 import (
 	"context"

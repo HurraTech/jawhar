@@ -21,6 +21,7 @@ import (
 	"hurracloud.io/jawhar/internal/agent"
 	pb "hurracloud.io/jawhar/internal/agent/proto"
 	"hurracloud.io/jawhar/internal/database"
+	"hurracloud.io/jawhar/internal/manager"
 	"hurracloud.io/jawhar/internal/models"
 	zahif "hurracloud.io/jawhar/internal/zahif"
 	zahif_pb "hurracloud.io/jawhar/internal/zahif/proto"
@@ -38,6 +39,8 @@ type Controller struct {
 
 /* GET /sources */
 func (c *Controller) GetSources(ctx echo.Context) error {
+	manager.UpdateSources(c.InternalStoragePath)
+
 	var partitions []models.DrivePartition
 	database.DB.
 		Order("order_number asc").Order("drive_partitions.id asc").Joins("Drive").

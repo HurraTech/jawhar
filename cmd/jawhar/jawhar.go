@@ -4,14 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/jessevdk/go-flags"
 	"github.com/labstack/echo/v4"
 	log "github.com/sirupsen/logrus"
 
 	"hurracloud.io/jawhar/internal/agent"
-	"hurracloud.io/jawhar/internal/background"
 	"hurracloud.io/jawhar/internal/controller"
 	"hurracloud.io/jawhar/internal/database"
 	"hurracloud.io/jawhar/internal/zahif"
@@ -77,27 +75,12 @@ func main() {
 		}
 	}
 
-	// Run now and schedule job to update sources (disks and index progress) every 5 seconds
-	background.UpdateSources(internalStorage)
-	ticker := time.NewTicker(5 * time.Second)
-	quit := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				background.UpdateSources(internalStorage)
-			case <-quit:
-				ticker.Stop()
-				return
-			}
-		}
-	}()
-
 	controller := &controller.Controller{MountPointsRoot: mountRoot,
-		ContainersRoot: containersRoot,
-		SouqAPI:        options.SouqAPI,
-		SouqUsername:   "HURRANET",
-		SouqPassword:   "bSdh~e9J:FTbLS#w",
+		ContainersRoot:      containersRoot,
+		SouqAPI:             options.SouqAPI,
+		InternalStoragePath: internalStorage,
+		SouqUsername:        "HURRANET",
+		SouqPassword:        "bSdh~e9J:FTbLS#w",
 	}
 	e := echo.New()
 	e.GET("/sources", controller.GetSources)
