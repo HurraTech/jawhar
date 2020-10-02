@@ -1,10 +1,11 @@
-package manager
+package system
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
@@ -45,43 +46,52 @@ var supportedFilesystems = map[string]bool{
 	"ntfs": true,
 }
 
+var lastFullUpdate time.Time
+
 func UpdateSources(internalStoragePath string) error {
-	if err := retrieveSources(); err != nil {
+
+	fullUpdate := false
+	if time.Since(lastFullUpdate).Minutes() >= 10 {
+		fullUpdate = true
+	}
+
+	log.Debugf("Updating sources (full=%t)", fullUpdate)
+	partitions, err := updateSources(fullUpdate)
+	if err != nil {
 		return err
 	}
 
-	updateInternalStorageDummyPartition(internalStoragePath)
-	updateIndexingProgress()
+	if fullUpdate {
+		updateInternalStorageDummyPartition(internalStoragePath, partitions)
+		lastFullUpdate = time.Now()
+	}
+	updateIndexingProgress(partitions)
+
 	return nil
 }
 
-func retrieveSources() error {
+func updateSources(fullUpdate bool) ([]models.DrivePartition, error) {
 	response, err := agent.Client.GetDrives(context.Background(), &pb.GetDrivesRequest{})
 	if err != nil {
-		return fmt.Errorf("Agent Client Failed to call GetDrives: %s", err)
+		return nil, fmt.Errorf("Agent Client Failed to call GetDrives: %s", err)
 	}
 
 	var attacheDrivesSN []string
+	var partitions []models.DrivePartition
 	for _, drive := range response.Drives {
 		// Check if we know this drive
 		log.Tracef("Agent returned drive %v", drive)
 		var aDrive models.Drive
-		result := database.DB.Where("serial_number = ?", drive.SerialNumber).First(&aDrive)
-
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			// First time we see this drive
-			log.Debugf("First time we see drive with serial number: %v. Creating a record.", drive.SerialNumber)
-			aDrive = models.Drive{SerialNumber: drive.SerialNumber}
-			database.DB.Create(&aDrive)
-		}
-
+		database.DB.FirstOrInit(&aDrive, &models.Drive{SerialNumber: drive.SerialNumber})
 		aDrive.Name = drive.Name
-		aDrive.Status = "attached"
 		aDrive.DeviceFile = drive.DeviceFile
 		aDrive.DriveType = drive.Type
 		aDrive.SizeBytes = drive.SizeBytes
 		attacheDrivesSN = append(attacheDrivesSN, aDrive.SerialNumber)
-		database.DB.Save(&aDrive)
+		if fullUpdate || aDrive.Status != "attached" {
+			aDrive.Status = "attached"
+			database.DB.Save(&aDrive)
+		}
 
 		for _, partition := range drive.Partitions {
 			// Check if we know this partition
@@ -114,28 +124,32 @@ func retrieveSources() error {
 			aPartition.Label = partition.Label
 			aPartition.IsReadOnly = partition.IsReadOnly
 			aPartition.Filesystem = partition.Filesystem
+			var newStatus string
 			if partition.MountPoint != "" {
-				aPartition.Status = "mounted"
+				newStatus = "mounted"
 			} else if aPartition.Filesystem != "" && supportedFilesystems[aPartition.Filesystem] {
-				aPartition.Status = "unmounted"
+				newStatus = "unmounted"
 			} else {
-				aPartition.Status = "unmountable"
+				newStatus = "unmountable"
 			}
-			database.DB.Save(&aPartition)
+
+			if fullUpdate || newStatus != aPartition.Status {
+				aPartition.Status = newStatus
+				database.DB.Save(&aPartition)
+			}
+
+			partitions = append(partitions, aPartition)
 		}
 	}
 	// Update status of drives no longer attached
 	database.DB.Model(&models.Drive{}).Not(map[string]interface{}{"serial_number": attacheDrivesSN}).Update("status", "detached")
-	return nil
+	return partitions, nil
 }
 
-func updateInternalStorageDummyPartition(internalStoragePath string) {
+func updateInternalStorageDummyPartition(internalStoragePath string, partitions []models.DrivePartition) {
 	// Create a dummy partition for "Internal Storage"
 	// Internal Storage is a dummy partition that belongs a real mounted partition on some drive
 	// Let's find what real drive it belongs to
-	var partitions []models.DrivePartition
-	database.DB.Joins("Drive").Where("drive.status = ?", "attached").Find(&partitions)
-
 	var internalStorageDrive *models.Drive
 	var internalPartitionParent *models.DrivePartition
 	var longestPrefix string
@@ -179,8 +193,7 @@ func updateInternalStorageDummyPartition(internalStoragePath string) {
 	database.DB.Save(&internalStoragePartition)
 }
 
-func updateIndexingProgress() {
-	var partitions []models.DrivePartition
+func updateIndexingProgress(partitions []models.DrivePartition) {
 	database.DB.Where("index_status <> ?", "").Find(&partitions)
 
 	// Update index status (if partition has been indexed)

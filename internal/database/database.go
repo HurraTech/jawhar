@@ -3,6 +3,7 @@ package database
 import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"hurracloud.io/jawhar/internal/models"
 )
@@ -11,9 +12,17 @@ var (
 	DB *gorm.DB
 )
 
-func OpenDatabase(dbFile string) {
+func OpenDatabase(dbFile string, debug bool) {
 	var err error
-	DB, err = gorm.Open(sqlite.Open(dbFile), &gorm.Config{})
+	logLevel := logger.Warn
+	if debug {
+		logLevel = logger.Info
+	}
+
+	DB, err = gorm.Open(sqlite.Open(dbFile), &gorm.Config{
+		Logger: logger.Default.LogMode(logLevel),
+	})
+
 	if err != nil {
 		panic("failed to open database")
 	}

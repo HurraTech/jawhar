@@ -12,6 +12,7 @@ import (
 	"hurracloud.io/jawhar/internal/agent"
 	"hurracloud.io/jawhar/internal/controller"
 	"hurracloud.io/jawhar/internal/database"
+	"hurracloud.io/jawhar/internal/system"
 	"hurracloud.io/jawhar/internal/zahif"
 )
 
@@ -45,7 +46,7 @@ func main() {
 		log.SetLevel(log.TraceLevel)
 	}
 
-	database.OpenDatabase(string(options.Database))
+	database.OpenDatabase(string(options.Database), len(options.Verbose) > 0)
 	database.Migrate()
 	agent.Connect(options.AgentHost, options.AgentPort)
 	zahif.Connect(options.ZahifHost, options.ZahifPort)
@@ -74,6 +75,8 @@ func main() {
 			log.Fatalf("Could not create internal storage directory: %s: %s", internalStorage, err)
 		}
 	}
+
+	system.UpdateSources(internalStorage)
 
 	controller := &controller.Controller{MountPointsRoot: mountRoot,
 		ContainersRoot:      containersRoot,

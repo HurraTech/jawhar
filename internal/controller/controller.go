@@ -21,8 +21,8 @@ import (
 	"hurracloud.io/jawhar/internal/agent"
 	pb "hurracloud.io/jawhar/internal/agent/proto"
 	"hurracloud.io/jawhar/internal/database"
-	"hurracloud.io/jawhar/internal/manager"
 	"hurracloud.io/jawhar/internal/models"
+	"hurracloud.io/jawhar/internal/system"
 	zahif "hurracloud.io/jawhar/internal/zahif"
 	zahif_pb "hurracloud.io/jawhar/internal/zahif/proto"
 )
@@ -39,13 +39,13 @@ type Controller struct {
 
 /* GET /sources */
 func (c *Controller) GetSources(ctx echo.Context) error {
-	manager.UpdateSources(c.InternalStoragePath)
+	system.UpdateSources(c.InternalStoragePath)
 
 	var partitions []models.DrivePartition
 	database.DB.
 		Order("order_number asc").Order("drive_partitions.id asc").Joins("Drive").
-		Where("drive.status = ?", "attached").
-		Where("type <> ?", "system").
+		Where("drive.status = ? AND type <> ?", "attached", "system").
+		Or(models.DrivePartition{Type: "internal"}).
 		Find(&partitions)
 
 	return ctx.JSON(http.StatusOK, partitions)
