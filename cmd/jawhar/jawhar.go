@@ -117,6 +117,8 @@ func main() {
 		SouqPassword:        "bSdh~e9J:FTbLS#w",
 	}
 	e := echo.New()
+
+	// storage data
 	e.GET("/sources", controller.GetSources)
 	e.GET("/partitions", controller.GetPartitions)
 	e.POST("/sources/:type/:id/mount", controller.MountSource)
@@ -128,6 +130,8 @@ func main() {
 	e.POST("/sources/:type/:id/resumeIndex", controller.ResumeIndex)
 	e.GET("/sources/:type/:id", controller.BrowseSource)
 	e.GET("/sources/:type/:id/*", controller.BrowseSource)
+
+	// Apps
 	e.GET("/apps/store", controller.GetStoreApps)
 	e.GET("/apps", controller.ListInstalledApps)
 	e.GET("/apps/:id", controller.GetApp)
@@ -146,6 +150,8 @@ func main() {
 	e.PUT("/apps/:id/webapp/*", controller.ProxyWebApp)
 	e.POST("/apps/:id/webapp/*", controller.ProxyWebApp)
 	e.DELETE("/apps/:id/webapp/*", controller.ProxyWebApp)
+
+	// system management
 
 	log.Fatal(e.Start(fmt.Sprintf("%s:%d", options.Host, options.Port)))
 }

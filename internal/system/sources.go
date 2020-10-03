@@ -141,7 +141,7 @@ func updateInternalStorageDummyPartition(internalStoragePath string, partitions 
 	var tries []string
 	for _, partition := range partitions {
 		tries = append(tries, partition.MountPoint)
-		if strings.HasPrefix(internalStoragePath, partition.MountPoint) &&
+		if partition.Status == "mounted" && strings.HasPrefix(internalStoragePath, partition.MountPoint) &&
 			len(partition.MountPoint) > len(longestPrefix) {
 			// Internal Storage directory lives in this partition
 			internalPartitionParent = &partition
@@ -149,7 +149,7 @@ func updateInternalStorageDummyPartition(internalStoragePath string, partitions 
 			log.Debugf("Drive is candidate for internal storage: %v", partition.Drive)
 		}
 	}
-	if internalPartitionParent.ID == 0 {
+	if internalPartitionParent == nil {
 		log.Errorf("Could not determine drive for internal storage path: %s, tried: %v",
 			internalStoragePath, tries)
 		log.Warningf("Stats for internal storage will be incorrect due to failure in determining its drive")
@@ -175,9 +175,6 @@ func updateInternalStorageDummyPartition(internalStoragePath string, partitions 
 	database.DB.Where(models.DrivePartition{
 		DeviceFile: "/dev/dummy1",
 	}).FirstOrInit(&internalStoragePartition)
-	log.Errorf("FIRST OR INIT RETURNED %v", internalStoragePartition)
-
-	log.Error("~!~~~~~~ ORDER ", internalStorageDrive.OrderNumber)
 	internalStoragePartition.AvailableBytes = internalPartitionParent.AvailableBytes
 	internalStoragePartition.SizeBytes = internalPartitionParent.SizeBytes
 	internalStoragePartition.DriveID = internalStorageDrive.ID
