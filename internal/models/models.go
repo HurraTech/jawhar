@@ -6,6 +6,7 @@ import (
 
 type Drive struct {
 	gorm.Model
+	OrderNumber  int `gorm:"default:1"`
 	Name         string
 	SerialNumber string `gorm:"index"`
 	Status       string `gorm:"index:dstatus_ptype"`
@@ -21,7 +22,7 @@ type DrivePartition struct {
 	OrderNumber           int `gorm:"default:1"`
 	Name                  string
 	Caption               string
-	DriveID               int
+	DriveID               uint
 	Drive                 Drive
 	DeviceFile            string
 	Label                 string
@@ -31,7 +32,7 @@ type DrivePartition struct {
 	Filesystem            string
 	MountPoint            string
 	Status                string
-	Type                  string `gorm:"default:partition,index:,index:dstatus_ptype"`
+	Type                  string `gorm:"default:partition;index:;index:dstatus_ptype"`
 	IndexStatus           string
 	IndexProgress         float32
 	IndexTotalDocuments   int32

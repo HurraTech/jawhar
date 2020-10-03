@@ -39,14 +39,25 @@ type Controller struct {
 
 /* GET /sources */
 func (c *Controller) GetSources(ctx echo.Context) error {
-	var partitions []models.DrivePartition
+	// var partitions []models.DrivePartition
+	var drives []models.Drive
 	database.DB.
-		Order("order_number asc").Order("drive_partitions.id asc").Joins("Drive").
-		Where("drive.status = ? AND type <> ?", "attached", "system").
-		Or(models.DrivePartition{Type: "internal"}).
-		Find(&partitions)
+		Order("drives.order_number asc").Order("drives.id asc").
+		Preload("Partitions", func(db *gorm.DB) *gorm.DB {
+			return db.Where("type <> ?", "system").Order("order_number asc")
+		}).
+		Where("status = ?", "attached").
+		Find(&drives)
 
+	return ctx.JSON(http.StatusOK, drives)
+}
+
+/* GET /partitions */
+func (c *Controller) GetPartitions(ctx echo.Context) error {
+	var partitions []models.DrivePartition
+	database.DB.Find(&partitions)
 	return ctx.JSON(http.StatusOK, partitions)
+
 }
 
 /* POST /sources/:type/:id/mount */

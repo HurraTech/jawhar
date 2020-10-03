@@ -135,7 +135,7 @@ func updateInternalStorageDummyPartition(internalStoragePath string, partitions 
 	// Create a dummy partition for "Internal Storage"
 	// Internal Storage is a dummy partition that belongs a real mounted partition on some drive
 	// Let's find what real drive it belongs to
-	var internalStorageDrive *models.Drive
+	var internalStorageDrive models.Drive
 	var internalPartitionParent *models.DrivePartition
 	var longestPrefix string
 	var tries []string
@@ -143,39 +143,51 @@ func updateInternalStorageDummyPartition(internalStoragePath string, partitions 
 		tries = append(tries, partition.MountPoint)
 		if strings.HasPrefix(internalStoragePath, partition.MountPoint) &&
 			len(partition.MountPoint) > len(longestPrefix) {
-			// Internal Storage directory lives in this partition, let's create another
-			internalStorageDrive = &partition.Drive
+			// Internal Storage directory lives in this partition
 			internalPartitionParent = &partition
 			longestPrefix = partition.MountPoint
+			log.Debugf("Drive is candidate for internal storage: %v", partition.Drive)
 		}
 	}
-	if internalStorageDrive == nil {
+	if internalPartitionParent.ID == 0 {
 		log.Errorf("Could not determine drive for internal storage path: %s, tried: %v",
 			internalStoragePath, tries)
 		log.Warningf("Stats for internal storage will be incorrect due to failure in determining its drive")
-		internalStorageDrive = &models.Drive{Status: "attached"}
+		database.DB.Where(models.Drive{Status: "attached",
+			SerialNumber: "0",
+			Name:         "internal",
+			DeviceFile:   "/dev/internal",
+			OrderNumber:  0,
+		}).FirstOrCreate(&internalStorageDrive)
+
 		internalPartitionParent = &models.DrivePartition{}
 	} else {
-		log.Tracef("Internal storage path: %s belongs to drive: %s and partition: %s",
-			internalStoragePath, internalStorageDrive.DeviceFile, internalPartitionParent.Name)
+		database.DB.Where("id = ?", internalPartitionParent.DriveID).First(&internalStorageDrive)
+		log.Debugf("Internal storage path: %s belongs to drive: %v and partition: %s",
+			internalStoragePath, internalStorageDrive, internalPartitionParent.Name)
+	}
+
+	if internalStorageDrive.OrderNumber != 0 || internalStorageDrive.DriveType != "internal" {
+		database.DB.Debug().Model(internalStorageDrive).Updates(models.Drive{OrderNumber: -1, DriveType: "internal"})
 	}
 
 	var internalStoragePartition models.DrivePartition
-	database.DB.FirstOrInit(&internalStoragePartition, models.DrivePartition{
-		Name:       "internal-storage",
+	database.DB.Where(models.DrivePartition{
 		DeviceFile: "/dev/dummy1",
-	})
+	}).FirstOrInit(&internalStoragePartition)
+	log.Errorf("FIRST OR INIT RETURNED %v", internalStoragePartition)
+
+	log.Error("~!~~~~~~ ORDER ", internalStorageDrive.OrderNumber)
 	internalStoragePartition.AvailableBytes = internalPartitionParent.AvailableBytes
 	internalStoragePartition.SizeBytes = internalPartitionParent.SizeBytes
-	internalStoragePartition.Drive = *internalStorageDrive
+	internalStoragePartition.DriveID = internalStorageDrive.ID
 	internalStoragePartition.Filesystem = internalPartitionParent.Filesystem
 	internalStoragePartition.MountPoint = internalStoragePath
-	internalStoragePartition.Label = internalPartitionParent.Label
 	internalStoragePartition.Status = "mounted"
 	internalStoragePartition.Caption = "Internal Storage"
 	internalStoragePartition.Type = "internal"
-	internalStoragePartition.OrderNumber = 0
-	database.DB.Save(&internalStoragePartition)
+	internalStoragePartition.OrderNumber = -1
+	database.DB.Debug().Omit("Drive").Save(&internalStoragePartition)
 }
 
 func updateIndexingProgress(partitions []models.DrivePartition) {

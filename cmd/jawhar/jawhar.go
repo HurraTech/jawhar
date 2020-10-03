@@ -118,6 +118,7 @@ func main() {
 	}
 	e := echo.New()
 	e.GET("/sources", controller.GetSources)
+	e.GET("/partitions", controller.GetPartitions)
 	e.POST("/sources/:type/:id/mount", controller.MountSource)
 	e.POST("/sources/:type/:id/unmount", controller.UnmountSource)
 	e.POST("/sources/:type/:id/search", controller.SearchSource)
