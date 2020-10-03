@@ -22,6 +22,7 @@ import (
 	pb "hurracloud.io/jawhar/internal/agent/proto"
 	"hurracloud.io/jawhar/internal/database"
 	"hurracloud.io/jawhar/internal/models"
+	"hurracloud.io/jawhar/internal/system"
 	zahif "hurracloud.io/jawhar/internal/zahif"
 	zahif_pb "hurracloud.io/jawhar/internal/zahif/proto"
 )
@@ -64,23 +65,31 @@ func (c *Controller) MountSource(ctx echo.Context) error {
 
 		mountPoint := path.Join(c.MountPointsRoot, partition.Caption)
 		log.Debugf("Mounting %s at %s", partition.DeviceFile, mountPoint)
-		_, err := agent.Client.MountDrive(context.Background(), &pb.MountDriveRequest{DeviceFile: partition.DeviceFile, MountPoint: mountPoint})
-		if err != nil {
-			log.Error("Agent Client Failed to call MountDrive: ", err)
-			return ctx.JSON(http.StatusServiceUnavailable, map[string]string{"message": "failed to mount"})
-		}
 
-		// let's ask zahif to resume watching for file change events and index them
-		if partition.IndexStatus != "" && partition.IndexStatus != "paused" {
-			indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
-			log.Debugf("Making Index Request to Zahif: IndexID=%s", indexID)
-			_, err := zahif.Client.StartOrResumeIndex(context.Background(), &zahif_pb.IndexRequest{
-				IndexIdentifier: indexID,
-			})
+		partition.Status = "mounting"
+		database.DB.Save(&partition)
+
+		go func() {
+			_, err := agent.Client.MountDrive(context.Background(), &pb.MountDriveRequest{DeviceFile: partition.DeviceFile, MountPoint: mountPoint})
 			if err != nil {
-				return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": fmt.Sprintf("unexpected error: %s", err)})
+				log.Error("Agent Client Failed to call MountDrive: ", err)
+				return // TODO Notify user of error
 			}
-		}
+
+			// let's ask zahif to resume watching for file change events and index them
+			if partition.IndexStatus != "" && partition.IndexStatus != "paused" {
+				indexID := fmt.Sprintf("%s-%s", sourceType, sourceId)
+				log.Debugf("Making Index Request to Zahif: IndexID=%s", indexID)
+				_, err := zahif.Client.StartOrResumeIndex(context.Background(), &zahif_pb.IndexRequest{
+					IndexIdentifier: indexID,
+				})
+				if err != nil {
+					return // TODO Notify user of error
+				}
+			}
+			system.UpdateSources(c.InternalStoragePath)
+
+		}()
 
 	} else {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
@@ -364,12 +373,17 @@ func (c *Controller) UnmountSource(ctx echo.Context) error {
 			}
 		}
 
+		partition.Status = "unmounting"
+		database.DB.Save(&partition)
 		log.Debugf("Unmounting %s", partition.DeviceFile)
-		_, err := agent.Client.UnmountDrive(context.Background(), &pb.UnmountDriveRequest{DeviceFile: partition.DeviceFile})
-		if err != nil {
-			log.Error("Agent Client Failed to call UnmountDrive: ", err)
-			return ctx.JSON(http.StatusServiceUnavailable, map[string]string{"message": "failed to mount"})
-		}
+
+		go func() {
+			_, err := agent.Client.UnmountDrive(context.Background(), &pb.UnmountDriveRequest{DeviceFile: partition.DeviceFile})
+			if err != nil {
+				log.Error("Agent Client Failed to call UnmountDrive: ", err)
+			}
+			system.UpdateSources(c.InternalStoragePath)
+		}()
 	} else {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
 	}
