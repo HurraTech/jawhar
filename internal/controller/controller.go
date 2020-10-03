@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -841,7 +842,7 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 
 	go func() {
 		// Let's ask agent to load the lateast image
-		appImageURL := fmt.Sprintf("%s/apps/%s/image", c.SouqAPI, app.UniqueID)
+		appImageURL := fmt.Sprintf("%s/apps/%s/image?arch=%s", c.SouqAPI, app.UniqueID, runtime.GOARCH)
 		log.Debugf("Downloading UI image %s", appImageURL)
 		_, err = agent.Client.LoadImage(context.Background(),
 			&pb.LoadImageRequest{URL: appImageURL, Username: c.SouqUsername, Password: c.SouqPassword})
@@ -857,7 +858,7 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 			for _, image := range strings.Split(app.Containers, ",") {
 				log.Tracef("Downloading container image: %s", image)
 				_, err = agent.Client.LoadImage(context.Background(),
-					&pb.LoadImageRequest{URL: fmt.Sprintf("%s/containers/%s", c.SouqAPI, image), Username: c.SouqUsername, Password: c.SouqPassword})
+					&pb.LoadImageRequest{URL: fmt.Sprintf("%s/containers/%s?arch=%s", c.SouqAPI, image, runtime.GOARCH), Username: c.SouqUsername, Password: c.SouqPassword})
 				if err != nil {
 					log.Errorf("Error loading image: %s: %s", image, err)
 					app.Status = "error"
@@ -867,7 +868,7 @@ func (c *Controller) InstallApp(ctx echo.Context) error {
 			}
 
 			// Let's retrieve container.yml file
-			req, err := http.NewRequest("GET", fmt.Sprintf("%s/apps/%s/containers", c.SouqAPI, app.UniqueID), nil)
+			req, err := http.NewRequest("GET", fmt.Sprintf("%s/apps/%s/containers?arhc=%s", c.SouqAPI, app.UniqueID, runtime.GOARCH), nil)
 			if err != nil {
 				log.Errorf("Error retrieving %s/containers.yml: %s", app.UniqueID, err)
 				app.Status = "error"
