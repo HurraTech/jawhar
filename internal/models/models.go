@@ -8,7 +8,7 @@ type Drive struct {
 	gorm.Model
 	Name         string
 	SerialNumber string `gorm:"index"`
-	Status       string
+	Status       string `gorm:"index:dstatus_ptype"`
 	DeviceFile   string
 	DriveType    string
 	SizeBytes    uint64
@@ -31,7 +31,7 @@ type DrivePartition struct {
 	Filesystem            string
 	MountPoint            string
 	Status                string
-	Type                  string `gorm:"default:partition"`
+	Type                  string `gorm:"default:partition,index:,index:dstatus_ptype"`
 	IndexStatus           string
 	IndexProgress         float32
 	IndexTotalDocuments   int32

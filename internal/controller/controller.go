@@ -75,6 +75,7 @@ func (c *Controller) MountSource(ctx echo.Context) error {
 				log.Error("Agent Client Failed to call MountDrive: ", err)
 				return // TODO Notify user of error
 			}
+			system.UpdateSources(c.InternalStoragePath)
 
 			// let's ask zahif to resume watching for file change events and index them
 			if partition.IndexStatus != "" && partition.IndexStatus != "paused" {
@@ -87,8 +88,6 @@ func (c *Controller) MountSource(ctx echo.Context) error {
 					return // TODO Notify user of error
 				}
 			}
-			system.UpdateSources(c.InternalStoragePath)
-
 		}()
 
 	} else {
