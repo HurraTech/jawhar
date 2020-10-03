@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/jessevdk/go-flags"
 	"github.com/labstack/echo/v4"
+	"github.com/radovskyb/watcher"
 	log "github.com/sirupsen/logrus"
 
 	"hurracloud.io/jawhar/internal/agent"
@@ -77,6 +79,35 @@ func main() {
 	}
 
 	system.UpdateSources(internalStorage)
+
+	// Update whenever blocks storage is changed
+	w := watcher.New()
+	w.AddRecursive("/sys/block")
+	w.FilterOps(watcher.Create, watcher.Remove)
+	ticker := time.NewTicker(30 * time.Second)
+	go func() {
+		for {
+			select {
+			case event := <-w.Event:
+				log.Infof("USB device event %s", event)
+				time.Sleep(time.Second)
+				system.UpdateSources(internalStorage)
+			case <-ticker.C:
+				system.UpdateSources(internalStorage)
+			case err := <-w.Error:
+				log.Errorf("USB Watcher Error: %s", err)
+			case <-w.Closed:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+
+	go func() {
+		if err := w.Start(time.Millisecond * 100); err != nil {
+			log.Errorf("Error starting watcher: %s", err)
+		}
+	}()
 
 	controller := &controller.Controller{MountPointsRoot: mountRoot,
 		ContainersRoot:      containersRoot,

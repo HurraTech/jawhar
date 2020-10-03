@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
@@ -46,31 +45,20 @@ var supportedFilesystems = map[string]bool{
 	"ntfs": true,
 }
 
-var lastFullUpdate time.Time
-
 func UpdateSources(internalStoragePath string) error {
 
-	fullUpdate := false
-	if time.Since(lastFullUpdate).Minutes() >= 10 {
-		fullUpdate = true
-	}
-
-	log.Debugf("Updating sources (full=%t)", fullUpdate)
-	partitions, err := updateSources(fullUpdate)
+	partitions, err := updateSources()
 	if err != nil {
 		return err
 	}
 
-	if fullUpdate {
-		updateInternalStorageDummyPartition(internalStoragePath, partitions)
-		lastFullUpdate = time.Now()
-	}
+	updateInternalStorageDummyPartition(internalStoragePath, partitions)
 	updateIndexingProgress(partitions)
 
 	return nil
 }
 
-func updateSources(fullUpdate bool) ([]models.DrivePartition, error) {
+func updateSources() ([]models.DrivePartition, error) {
 	response, err := agent.Client.GetDrives(context.Background(), &pb.GetDrivesRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("Agent Client Failed to call GetDrives: %s", err)
@@ -88,10 +76,8 @@ func updateSources(fullUpdate bool) ([]models.DrivePartition, error) {
 		aDrive.DriveType = drive.Type
 		aDrive.SizeBytes = drive.SizeBytes
 		attacheDrivesSN = append(attacheDrivesSN, aDrive.SerialNumber)
-		if fullUpdate || aDrive.Status != "attached" {
-			aDrive.Status = "attached"
-			database.DB.Save(&aDrive)
-		}
+		aDrive.Status = "attached"
+		database.DB.Save(&aDrive)
 
 		for _, partition := range drive.Partitions {
 			// Check if we know this partition
@@ -133,16 +119,15 @@ func updateSources(fullUpdate bool) ([]models.DrivePartition, error) {
 				newStatus = "unmountable"
 			}
 
-			if fullUpdate || newStatus != aPartition.Status {
-				aPartition.Status = newStatus
-				database.DB.Save(&aPartition)
-			}
+			aPartition.Status = newStatus
+			database.DB.Save(&aPartition)
 
 			partitions = append(partitions, aPartition)
 		}
 	}
 	// Update status of drives no longer attached
 	database.DB.Model(&models.Drive{}).Not(map[string]interface{}{"serial_number": attacheDrivesSN}).Update("status", "detached")
+
 	return partitions, nil
 }
 
