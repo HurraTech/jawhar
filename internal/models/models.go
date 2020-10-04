@@ -13,12 +13,14 @@ type Drive struct {
 	DeviceFile   string
 	DriveType    string
 	SizeBytes    uint64
+	Vendor       string
 	IsRemovable  bool
 	Partitions   []DrivePartition
 }
 
 type DrivePartition struct {
 	gorm.Model
+	Index                 uint32
 	OrderNumber           int `gorm:"default:1"`
 	Name                  string
 	Caption               string

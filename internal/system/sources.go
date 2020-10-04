@@ -9,11 +9,13 @@ import (
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 
+	"hurracloud.io/jawhar/cmd/jawhar/options"
 	"hurracloud.io/jawhar/internal/agent"
 	pb "hurracloud.io/jawhar/internal/agent/proto"
 	"hurracloud.io/jawhar/internal/database"
 	"hurracloud.io/jawhar/internal/models"
 	"hurracloud.io/jawhar/internal/zahif"
+
 	zahif_pb "hurracloud.io/jawhar/internal/zahif/proto"
 )
 
@@ -45,14 +47,14 @@ var supportedFilesystems = map[string]bool{
 	"ntfs": true,
 }
 
-func UpdateSources(internalStoragePath string) error {
+func UpdateSources() error {
 
 	partitions, err := updateSources()
 	if err != nil {
 		return err
 	}
 
-	updateInternalStorageDummyPartition(internalStoragePath, partitions)
+	updateInternalStorageDummyPartition(options.CmdOptions.InternalStorage, partitions)
 	updateIndexingProgress(partitions)
 
 	return nil
@@ -75,6 +77,7 @@ func updateSources() ([]models.DrivePartition, error) {
 		aDrive.DeviceFile = drive.DeviceFile
 		aDrive.DriveType = drive.Type
 		aDrive.SizeBytes = drive.SizeBytes
+		aDrive.Vendor = drive.Vendor
 		attacheDrivesSN = append(attacheDrivesSN, aDrive.SerialNumber)
 		aDrive.Status = "attached"
 		database.DB.Save(&aDrive)
@@ -83,7 +86,7 @@ func updateSources() ([]models.DrivePartition, error) {
 			// Check if we know this partition
 			log.Tracef("Agent returned partition %v", partition)
 			var aPartition models.DrivePartition
-			uniqueName := fmt.Sprintf("%s-%s", drive.SerialNumber, partition.Name)
+			uniqueName := fmt.Sprintf("%s-%s", drive.SerialNumber, partition.Index)
 			result := database.DB.Where("name = ?", uniqueName).First(&aPartition)
 
 			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -141,7 +144,8 @@ func updateInternalStorageDummyPartition(internalStoragePath string, partitions 
 	var tries []string
 	for _, partition := range partitions {
 		tries = append(tries, partition.MountPoint)
-		if partition.Status == "mounted" && strings.HasPrefix(internalStoragePath, partition.MountPoint) &&
+		if partition.Status == "mounted" && strings.HasPrefix(options.CmdOptions.MountPointsRoot, options.CmdOptions.InternalStorage) &&
+			strings.HasPrefix(internalStoragePath, partition.MountPoint) &&
 			len(partition.MountPoint) > len(longestPrefix) {
 			// Internal Storage directory lives in this partition
 			internalPartitionParent = &partition
@@ -158,6 +162,7 @@ func updateInternalStorageDummyPartition(internalStoragePath string, partitions 
 			Name:         "internal",
 			DeviceFile:   "/dev/internal",
 			OrderNumber:  0,
+			Vendor:       "HurraCloud",
 		}).FirstOrCreate(&internalStorageDrive)
 
 		internalPartitionParent = &models.DrivePartition{}
@@ -193,7 +198,7 @@ func updateIndexingProgress(partitions []models.DrivePartition) {
 	// Update index status (if partition has been indexed)
 	for _, aPartition := range partitions {
 		var indexProgressRes *zahif_pb.IndexProgressResponse
-		indexID := fmt.Sprintf("%s-%d", aPartition.Type, aPartition.ID)
+		indexID := fmt.Sprintf("%s-%d", aPartition.Type, aPartition.Index)
 
 		indexProgressRes, err := zahif.Client.IndexProgress(context.Background(), &zahif_pb.IndexProgressRequest{
 			IndexIdentifier: indexID,

@@ -31,7 +31,6 @@ import (
 type Controller struct {
 	MountPointsRoot      string
 	ContainersRoot       string
-	InternalStoragePath  string
 	SupportedFilesystems map[string]bool
 	SouqAPI              string
 	SouqUsername         string
@@ -56,7 +55,7 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 /* GET /partitions */
 func (c *Controller) GetPartitions(ctx echo.Context) error {
 	var partitions []models.DrivePartition
-	database.DB.Find(&partitions)
+	database.DB.Preload("Drive").Find(&partitions)
 	return ctx.JSON(http.StatusOK, partitions)
 
 }
@@ -87,7 +86,7 @@ func (c *Controller) MountSource(ctx echo.Context) error {
 				log.Error("Agent Client Failed to call MountDrive: ", err)
 				return // TODO Notify user of error
 			}
-			system.UpdateSources(c.InternalStoragePath)
+			system.UpdateSources()
 
 			// let's ask zahif to resume watching for file change events and index them
 			if partition.IndexStatus != "" && partition.IndexStatus != "paused" {
@@ -393,7 +392,7 @@ func (c *Controller) UnmountSource(ctx echo.Context) error {
 			if err != nil {
 				log.Error("Agent Client Failed to call UnmountDrive: ", err)
 			}
-			system.UpdateSources(c.InternalStoragePath)
+			system.UpdateSources()
 		}()
 	} else {
 		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})

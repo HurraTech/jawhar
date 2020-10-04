@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jessevdk/go-flags"
 	"github.com/labstack/echo/v4"
 	"github.com/radovskyb/watcher"
 	log "github.com/sirupsen/logrus"
 
+	"hurracloud.io/jawhar/cmd/jawhar/options"
 	"hurracloud.io/jawhar/internal/agent"
 	"hurracloud.io/jawhar/internal/controller"
 	"hurracloud.io/jawhar/internal/database"
@@ -18,57 +18,39 @@ import (
 	"hurracloud.io/jawhar/internal/zahif"
 )
 
-type Options struct {
-	Host            string         `short:"h" long:"host" env:"HOST" description:"Host to bind HTTP server to" default:"127.0.0.1"`
-	Port            int            `short:"p" long:"port" env:"PORT" description:"Port to listen HTTP server" default:"5050"`
-	Database        flags.Filename `short:"d" long:"db" env:"DB" description:"Database filename" default:"./data/jawhar.db"`
-	AgentHost       string         `short:"H" long:"agent_host" env:"AGENT_HOST" description:"Agent Server Host" default:"127.0.0.1"`
-	AgentPort       int            `short:"P" long:"agent_port" env:"AGENT_PORT" description:"Agent Server Port" default:"10000"`
-	ZahifHost       string         `short:"z" long:"zahif_host" env:"ZAHIF_HOST" description:"Zahif Server Host" default:"127.0.0.1"`
-	ZahifPort       int            `short:"o" long:"zahif_port" env:"ZAHIF_PORT" description:"Zahif Server Port" default:"10001"`
-	SouqAPI         string         `short:"S" long:"souq_api" env:"SOUQ_API" description:"Souq API Host" default:"https://souq.hurracloud.io"`
-	MountPointsRoot string         `short:"m" long:"mount_points_root" env:"MOUNT_POINTS_ROOT" description:"Path under which drives should be mounted" default:"./data/mounts"`
-	ContainersRoot  string         `short:"D" long:"containers_root" env:"CONTAINERS_ROOT" description:"Containers root context" default:"./data"`
-	InternalStorage string         `short:"s" long:"internal_storage" env:"INTERNAL_STORAGE" description:"Path to use for 'Internal Storage'" default:"./data/storage"`
-	Verbose         []bool         `short:"v" long:"verbose" description:"Enable verbose logging"`
-}
-
-var options Options
-
 func main() {
-	_, err := flags.Parse(&options)
 
-	if err != nil {
+	if err := options.Parse(); err != nil {
 		panic(err)
 	}
 
-	if len(options.Verbose) == 1 {
+	if len(options.CmdOptions.Verbose) == 1 {
 		log.SetLevel(log.DebugLevel)
-	} else if len(options.Verbose) > 1 {
+	} else if len(options.CmdOptions.Verbose) > 1 {
 		log.SetLevel(log.TraceLevel)
 	}
 
-	database.OpenDatabase(string(options.Database), len(options.Verbose) > 0)
+	database.OpenDatabase(string(options.CmdOptions.Database), len(options.CmdOptions.Verbose) > 0)
 	database.Migrate()
-	agent.Connect(options.AgentHost, options.AgentPort)
-	zahif.Connect(options.ZahifHost, options.ZahifPort)
+	agent.Connect(options.CmdOptions.AgentHost, options.CmdOptions.AgentPort)
+	zahif.Connect(options.CmdOptions.ZahifHost, options.CmdOptions.ZahifPort)
 
-	mountRoot, err := filepath.Abs(options.MountPointsRoot)
+	mountRoot, err := filepath.Abs(options.CmdOptions.MountPointsRoot)
 	if err != nil {
-		log.Warnf("Could not determine absolute path for mounts directory '%s': %s", options.MountPointsRoot, err)
-		mountRoot = options.MountPointsRoot
+		log.Warnf("Could not determine absolute path for mounts directory '%s': %s", options.CmdOptions.MountPointsRoot, err)
+		mountRoot = options.CmdOptions.MountPointsRoot
 	}
 
-	containersRoot, err := filepath.Abs(options.ContainersRoot)
+	containersRoot, err := filepath.Abs(options.CmdOptions.ContainersRoot)
 	if err != nil {
-		log.Warnf("Could not determine absolute path for containers directory '%s': %s", options.ContainersRoot, err)
-		containersRoot = options.ContainersRoot
+		log.Warnf("Could not determine absolute path for containers directory '%s': %s", options.CmdOptions.ContainersRoot, err)
+		containersRoot = options.CmdOptions.ContainersRoot
 	}
 
-	internalStorage, err := filepath.Abs(options.InternalStorage)
+	internalStorage, err := filepath.Abs(options.CmdOptions.InternalStorage)
 	if err != nil {
-		log.Warnf("Could not determine absolute path for internal storage directory '%s': %s", options.InternalStorage, err)
-		containersRoot = options.InternalStorage
+		log.Warnf("Could not determine absolute path for internal storage directory '%s': %s", options.CmdOptions.InternalStorage, err)
+		containersRoot = options.CmdOptions.InternalStorage
 	}
 
 	if _, err := os.Stat(internalStorage); os.IsNotExist(err) {
@@ -78,7 +60,7 @@ func main() {
 		}
 	}
 
-	system.UpdateSources(internalStorage)
+	system.UpdateSources()
 
 	// Update whenever blocks storage is changed
 	w := watcher.New()
@@ -91,9 +73,9 @@ func main() {
 			case event := <-w.Event:
 				log.Infof("USB device event %s", event)
 				time.Sleep(time.Second)
-				system.UpdateSources(internalStorage)
+				system.UpdateSources()
 			case <-ticker.C:
-				system.UpdateSources(internalStorage)
+				system.UpdateSources()
 			case err := <-w.Error:
 				log.Errorf("USB Watcher Error: %s", err)
 			case <-w.Closed:
@@ -110,11 +92,10 @@ func main() {
 	}()
 
 	controller := &controller.Controller{MountPointsRoot: mountRoot,
-		ContainersRoot:      containersRoot,
-		SouqAPI:             options.SouqAPI,
-		InternalStoragePath: internalStorage,
-		SouqUsername:        "HURRANET",
-		SouqPassword:        "bSdh~e9J:FTbLS#w",
+		ContainersRoot: containersRoot,
+		SouqAPI:        options.CmdOptions.SouqAPI,
+		SouqUsername:   "HURRANET",
+		SouqPassword:   "bSdh~e9J:FTbLS#w",
 	}
 	e := echo.New()
 
@@ -153,5 +134,5 @@ func main() {
 
 	// system management
 
-	log.Fatal(e.Start(fmt.Sprintf("%s:%d", options.Host, options.Port)))
+	log.Fatal(e.Start(fmt.Sprintf("%s:%d", options.CmdOptions.Host, options.CmdOptions.Port)))
 }

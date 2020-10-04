@@ -23,6 +23,8 @@ func OpenDatabase(dbFile string, debug bool) {
 		Logger: logger.Default.LogMode(logLevel),
 	})
 
+	DB.Exec("PRAGMA journal_mode=WAL;")
+
 	if err != nil {
 		panic("failed to open database")
 	}
