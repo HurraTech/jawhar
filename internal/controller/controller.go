@@ -82,7 +82,7 @@ func (c *Controller) MountSource(ctx echo.Context) error {
 		database.DB.Save(&partition)
 
 		go func() {
-			_, err := agent.Client.MountDrive(context.Background(), &pb.MountDriveRequest{DeviceFile: partition.DeviceFile, MountPoint: mountPoint})
+			_, err := agent.Client.MountDrive(context.Background(), &pb.MountDriveRequest{DeviceFile: partition.DeviceFile, MountPoint: mountPoint, Filesystem: partition.Filesystem})
 			if err != nil {
 				log.Error("Agent Client Failed to call MountDrive: ", err)
 				return // TODO Notify user of error
@@ -389,7 +389,7 @@ func (c *Controller) UnmountSource(ctx echo.Context) error {
 		log.Debugf("Unmounting %s", partition.DeviceFile)
 
 		go func() {
-			_, err := agent.Client.UnmountDrive(context.Background(), &pb.UnmountDriveRequest{DeviceFile: partition.DeviceFile})
+			_, err := agent.Client.UnmountDrive(context.Background(), &pb.UnmountDriveRequest{MountPoint: partition.MountPoint})
 			if err != nil {
 				log.Error("Agent Client Failed to call UnmountDrive: ", err)
 			}
