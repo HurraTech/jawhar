@@ -1,6 +1,8 @@
 package database
 
 import (
+	"fmt"
+
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -19,7 +21,7 @@ func OpenDatabase(dbFile string, debug bool) {
 		logLevel = logger.Info
 	}
 
-	DB, err = gorm.Open(sqlite.Open(dbFile), &gorm.Config{
+	DB, err = gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?cache=shared", dbFile)), &gorm.Config{
 		Logger: logger.Default.LogMode(logLevel),
 	})
 

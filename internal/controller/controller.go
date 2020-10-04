@@ -86,6 +86,9 @@ func (c *Controller) MountSource(ctx echo.Context) error {
 				log.Error("Agent Client Failed to call MountDrive: ", err)
 				return // TODO Notify user of error
 			}
+			partition.Status = "mounted"
+			partition.MountPoint = mountPoint
+			database.DB.Save(&partition)
 			system.UpdateSources()
 
 			// let's ask zahif to resume watching for file change events and index them
@@ -392,6 +395,8 @@ func (c *Controller) UnmountSource(ctx echo.Context) error {
 			if err != nil {
 				log.Error("Agent Client Failed to call UnmountDrive: ", err)
 			}
+			partition.Status = "unmounted"
+			database.DB.Save(&partition)
 			system.UpdateSources()
 		}()
 	} else {
