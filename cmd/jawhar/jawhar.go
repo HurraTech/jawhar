@@ -47,16 +47,17 @@ func main() {
 		containersRoot = options.CmdOptions.ContainersRoot
 	}
 
-	internalStorage, err := filepath.Abs(options.CmdOptions.InternalStorage)
+	internalStorageAbs, err := filepath.Abs(options.CmdOptions.InternalStorage)
 	if err != nil {
 		log.Warnf("Could not determine absolute path for internal storage directory '%s': %s", options.CmdOptions.InternalStorage, err)
-		containersRoot = options.CmdOptions.InternalStorage
+		internalStorageAbs = options.CmdOptions.InternalStorage
 	}
+	options.CmdOptions.InternalStorage = internalStorageAbs
 
-	if _, err := os.Stat(internalStorage); os.IsNotExist(err) {
-		err := os.MkdirAll(internalStorage, 0755)
+	if _, err := os.Stat(internalStorageAbs); os.IsNotExist(err) {
+		err := os.MkdirAll(internalStorageAbs, 0755)
 		if err != nil {
-			log.Fatalf("Could not create internal storage directory: %s: %s", internalStorage, err)
+			log.Fatalf("Could not create internal storage directory: %s: %s", internalStorageAbs, err)
 		}
 	}
 

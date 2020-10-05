@@ -9,7 +9,7 @@ type Drive struct {
 	OrderNumber  int `gorm:"default:1"`
 	Name         string
 	SerialNumber string `gorm:"index"`
-	Status       string `gorm:"index:dstatus_ptype"`
+	Status       string `gorm:"index:dstatus_ptype`
 	DeviceFile   string
 	DriveType    string
 	SizeBytes    uint64

@@ -86,7 +86,7 @@ func updateSources() ([]models.DrivePartition, error) {
 			// Check if we know this partition
 			log.Tracef("Agent returned partition %v", partition)
 			var aPartition models.DrivePartition
-			uniqueName := fmt.Sprintf("%s-%s", drive.SerialNumber, partition.Index)
+			uniqueName := fmt.Sprintf("%s-%d", drive.SerialNumber, partition.Index)
 			result := database.DB.Where("name = ?", uniqueName).First(&aPartition)
 
 			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -129,7 +129,9 @@ func updateSources() ([]models.DrivePartition, error) {
 		}
 	}
 	// Update status of drives no longer attached
-	database.DB.Model(&models.Drive{}).Not(map[string]interface{}{"serial_number": attacheDrivesSN}).Update("status", "detached")
+	database.DB.Model(&models.Drive{}).
+		Where(map[string]interface{}{"status": "attached"}).
+		Not(map[string]interface{}{"serial_number": attacheDrivesSN}).Update("status", "detached")
 
 	return partitions, nil
 }
@@ -198,14 +200,14 @@ func updateIndexingProgress(partitions []models.DrivePartition) {
 	// Update index status (if partition has been indexed)
 	for _, aPartition := range partitions {
 		var indexProgressRes *zahif_pb.IndexProgressResponse
-		indexID := fmt.Sprintf("%s-%d", aPartition.Type, aPartition.Index)
-
+		indexID := fmt.Sprintf("%s-%d", aPartition.Type, aPartition.ID)
 		indexProgressRes, err := zahif.Client.IndexProgress(context.Background(), &zahif_pb.IndexProgressRequest{
 			IndexIdentifier: indexID,
 		})
 
 		if err == nil {
 			aPartition.IndexProgress = indexProgressRes.PercentageDone
+			log.Debugf("Index %s progress is %f", indexID, indexProgressRes.PercentageDone)
 			if aPartition.IndexProgress >= 100 && (aPartition.IndexStatus == "creating" || aPartition.IndexStatus == "resuming") {
 				aPartition.IndexStatus = "created"
 			} else if !indexProgressRes.IsRunning && aPartition.IndexStatus == "deleting" {
@@ -224,7 +226,7 @@ func updateIndexingProgress(partitions []models.DrivePartition) {
 			aPartition.IndexTotalDocuments = 0
 			aPartition.IndexIndexedDocuments = 0
 		} else {
-			log.Errorf("Unexpected error: %v", err)
+			log.Errorf("Unexpected error while checking index %s progress: %v", indexID, err)
 		}
 		database.DB.Save(&aPartition)
 	}
