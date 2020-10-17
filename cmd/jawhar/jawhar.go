@@ -112,6 +112,8 @@ func main() {
 	e.POST("/sources/:type/:id/resumeIndex", controller.ResumeIndex)
 	e.GET("/sources/:type/:id", controller.BrowseSource)
 	e.GET("/sources/:type/:id/*", controller.BrowseSource)
+	e.POST("/sources/:type/:id/*", controller.UploadToSource)
+	e.DELETE("/sources/:type/:id/*", controller.DeleteFromSource)
 
 	// Apps
 	e.GET("/apps/store", controller.GetStoreApps)

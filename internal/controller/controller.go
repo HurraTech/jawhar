@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -499,6 +500,121 @@ func (c *Controller) BrowseSource(ctx echo.Context) error {
 	default:
 		return ctx.File(targetPath)
 	}
+}
+
+/* POST /sources/:type/:id/* */
+func (c *Controller) UploadToSource(ctx echo.Context) error {
+	sourceType := ctx.Param("type")
+	sourceID := ctx.Param("id")
+	requestedPath := ""
+	if len(ctx.ParamValues()) > 2 {
+		requestedPath = ctx.ParamValues()[2]
+	}
+	var targetPath string
+	var source models.DrivePartition
+	if sourceType == "partition" || sourceType == "internal" {
+		result := database.DB.Where("id = ?", sourceID).First(&source)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return ctx.JSON(http.StatusNotFound, result.Error)
+		} else if result.Error != nil {
+			log.Error("Unexpected error querying DB:", result.Error)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		} else if source.Status != "mounted" {
+			return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "cannot list unmounted source"})
+		}
+
+		targetPath = path.Join(source.MountPoint, requestedPath)
+	} else {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
+	}
+
+	rel, err := filepath.Rel(source.MountPoint, targetPath)
+	if strings.Contains(rel, "..") {
+		return ctx.JSON(http.StatusUnauthorized, map[string]string{"message": "cannot access files outsdie of drive"})
+	}
+
+	dir := path.Join(source.MountPoint, filepath.Dir(requestedPath))
+	err = os.MkdirAll(dir, 0755)
+	if err != nil {
+		log.Errorf("Could not make parent directory: %s: %s", dir, err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	file, err := ctx.FormFile("file")
+	if err != nil {
+		log.Errorf("Could not read form file: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+	src, err := file.Open()
+	if err != nil {
+		log.Errorf("Could not open form file: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+	defer src.Close()
+
+	// Destination
+	dst, err := os.Create(targetPath)
+	if err != nil {
+		log.Errorf("Could not created destination file: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+	defer dst.Close()
+
+	// Copy
+	if _, err = io.Copy(dst, src); err != nil {
+		log.Errorf("Could not copy to destination file: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{"message": "uploaded"})
+}
+
+/* DELETE /sources/:type/:id/* */
+func (c *Controller) DeleteFromSource(ctx echo.Context) error {
+	sourceType := ctx.Param("type")
+	sourceID := ctx.Param("id")
+	requestedPath := ""
+	if len(ctx.ParamValues()) > 2 {
+		requestedPath = ctx.ParamValues()[2]
+	}
+	var targetPath string
+	var source models.DrivePartition
+	if sourceType == "partition" || sourceType == "internal" {
+		result := database.DB.Where("id = ?", sourceID).First(&source)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return ctx.JSON(http.StatusNotFound, result.Error)
+		} else if result.Error != nil {
+			log.Error("Unexpected error querying DB:", result.Error)
+			return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+		} else if source.Status != "mounted" {
+			return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "cannot list unmounted source"})
+		}
+
+		targetPath = path.Join(source.MountPoint, requestedPath)
+	} else {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": fmt.Sprintf("unsupported type '%s'", sourceType)})
+	}
+
+	_, err := os.Stat(targetPath)
+	if os.IsNotExist(err) {
+		return ctx.JSON(http.StatusNotFound, map[string]string{"message": fmt.Sprintf("%s: no such file or direcrory", requestedPath)})
+	} else if err != nil {
+		log.Errorf("Could not stat directory: %s: %s", targetPath, err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	rel, err := filepath.Rel(source.MountPoint, targetPath)
+	if strings.Contains(rel, "..") {
+		return ctx.JSON(http.StatusUnauthorized, map[string]string{"message": "cannot access files outsdie of drive"})
+	}
+
+	err = os.RemoveAll(targetPath)
+	if err != nil {
+		log.Errorf("Could not remove : %s: %s", targetPath, err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{"message": "removed"})
 }
 
 /* GET /app/store */
