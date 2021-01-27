@@ -3,7 +3,7 @@ package options
 import "github.com/jessevdk/go-flags"
 
 type Options struct {
-	Host            string         `short:"h" long:"host" env:"HOST" description:"Host to bind HTTP server to" default:"127.0.0.1"`
+	Host            string         `short:"b" long:"host" env:"HOST" description:"Host to bind HTTP server to" default:"127.0.0.1"`
 	Port            int            `short:"p" long:"port" env:"PORT" description:"Port to listen HTTP server" default:"5050"`
 	Database        flags.Filename `short:"d" long:"db" env:"DB" description:"Database filename" default:"./data/jawhar.db"`
 	AgentHost       string         `short:"H" long:"agent_host" env:"AGENT_HOST" description:"Agent Server Host" default:"127.0.0.1"`
