@@ -61,7 +61,10 @@ func main() {
 		}
 	}
 
-	system.UpdateSources()
+	err = system.UpdateSources()
+	if err != nil {
+		log.Errorf("Could not create refresh sources: %s", err)
+	}
 
 	// Update whenever blocks storage is changed
 	w := watcher.New()
