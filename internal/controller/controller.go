@@ -1146,3 +1146,178 @@ func (c *Controller) DeleteApp(ctx echo.Context) error {
 
 	return ctx.JSON(http.StatusOK, app)
 }
+
+/* POST /apps/:id */
+func (c *Controller) UpdateSystem(ctx echo.Context) error {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/hurraos/%s", c.SouqAPI, ctx.Param("id")), nil)
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	req.SetBasicAuth(c.SouqUsername, c.SouqPassword)
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Errorf("Error connecting Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	souqApp := models.App{}
+	err = json.Unmarshal(body, &souqApp)
+	if err != nil {
+		log.Errorf("Error parsing Souq API: %s", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	// Do we have this app already installed?
+	var app models.App
+	result := database.DB.Where("unique_id = ?", ctx.Param("id")).First(&app)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		app = souqApp
+		emptyState := models.AppState{State: "{}"}
+		app.Status = "installing"
+		app.State = emptyState
+		database.DB.Create(&emptyState)
+		database.DB.Create(&app)
+	} else if app.Version == souqApp.Version {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{"message": "app already installed"})
+	} else {
+		app.Status = "updating"
+		app.Containers = souqApp.Containers
+		database.DB.Save(&app)
+	}
+
+	go func() {
+		// Let's ask agent to load the lateast image
+		appImageURL := fmt.Sprintf("%s/apps/%s/image?arch=%s", c.SouqAPI, app.UniqueID, runtime.GOARCH)
+		log.Debugf("Downloading UI image %s", appImageURL)
+		_, err = agent.Client.LoadImage(context.Background(),
+			&pb.LoadImageRequest{URL: appImageURL, Username: c.SouqUsername, Password: c.SouqPassword})
+		if err != nil {
+			log.Errorf("Error loading UI image: %s: %s", appImageURL, err)
+			app.Status = "error"
+			database.DB.Save(&app)
+			return
+		}
+
+		// Let's ask agent download and install all dependant container images (if it has any)
+		if strings.TrimSpace(app.Containers) != "" {
+			for _, image := range strings.Split(app.Containers, ",") {
+				log.Tracef("Downloading container image: %s", image)
+				_, err = agent.Client.LoadImage(context.Background(),
+					&pb.LoadImageRequest{URL: fmt.Sprintf("%s/containers/%s?arch=%s", c.SouqAPI, image, runtime.GOARCH), Username: c.SouqUsername, Password: c.SouqPassword})
+				if err != nil {
+					log.Errorf("Error loading image: %s: %s", image, err)
+					app.Status = "error"
+					database.DB.Save(&app)
+					return
+				}
+			}
+
+			// Let's retrieve container.yml file
+			req, err := http.NewRequest("GET", fmt.Sprintf("%s/apps/%s/containers?arhc=%s", c.SouqAPI, app.UniqueID, runtime.GOARCH), nil)
+			if err != nil {
+				log.Errorf("Error retrieving %s/containers.yml: %s", app.UniqueID, err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+
+			req.SetBasicAuth(c.SouqUsername, c.SouqPassword)
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Errorf("Error connecting Souq API: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+
+			defer resp.Body.Close()
+			body, err = ioutil.ReadAll(resp.Body)
+			if err != nil {
+				log.Errorf("Error connecting Souq API: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+
+			log.Tracef("Containers spec for app %s is %s", app.UniqueID, body)
+			app.ContainerSpec = string(body)
+			database.DB.Save(&app)
+
+			// start sub-containers
+			_, err = agent.Client.RunContainerSpec(context.Background(),
+				&pb.ContainerSpecRequest{Name: app.UniqueID, Context: c.ContainersRoot, Spec: string(body)})
+			if err != nil {
+				log.Errorf("Error starting container spec: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+		}
+
+		// Start App UI
+		// Find available port
+		if app.WebApp.Type == "sdk" {
+			listener, err := net.Listen("tcp", ":0")
+			if err != nil {
+				log.Errorf("Failed to find a free port number: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+			listener.Close() // we're not really using the listener
+			app.UIPort = listener.Addr().(*net.TCPAddr).Port
+			log.Debugf("Using port %d for UI of app %s", app.UIPort, app.UniqueID)
+
+			_, err = agent.Client.RunContainer(context.Background(),
+				&pb.RunContainerRequest{Name: app.UniqueID,
+					Image:             fmt.Sprintf("%s:%s", app.UniqueID, app.Version),
+					PortMappingSource: uint32(app.UIPort),
+					PortMappingTarget: 3000,
+					Env:               fmt.Sprintf("REACT_APP_AUID=%s", app.UniqueID),
+				})
+
+			if err != nil {
+				log.Errorf("Error starting UI container: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+		} else if app.WebApp.Type == "container" {
+
+			res, err := agent.Client.GetContainerPortBindingInSpec(context.Background(),
+				&pb.ContainerPortBindingInSpecRequest{
+					Name:          app.UniqueID,
+					Context:       c.ContainersRoot,
+					Spec:          app.ContainerSpec,
+					ContainerName: app.WebApp.TargetContainer,
+					ContainerPort: uint32(app.WebApp.TargetPort),
+				})
+
+			if err != nil {
+				log.Errorf("Error determining web app port: %s", err)
+				app.Status = "error"
+				database.DB.Save(&app)
+				return
+			}
+
+			app.UIPort = int(res.PortBinding)
+
+		}
+
+		app.Status = "installed"
+		database.DB.Save(&app)
+	}()
+
+	return ctx.JSON(http.StatusOK, app)
+}
