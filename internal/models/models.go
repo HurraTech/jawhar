@@ -85,3 +85,10 @@ type AppCommand struct {
 	Output    string
 	Status    string
 }
+
+type SystemState struct {
+	gorm.Model
+	Name           string
+	UpdateStatus   string
+	CurrentVersion string
+}
