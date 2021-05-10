@@ -38,6 +38,9 @@ var systemDevices = map[string]bool{
 	"/dev/nvme0n1p2": true,
 	"/dev/nvme0n1p3": true,
 	"/dev/nvme0n1p4": true,
+
+	// EC2
+	"/dev/xvda1": true,
 }
 
 var supportedFilesystems = map[string]bool{
