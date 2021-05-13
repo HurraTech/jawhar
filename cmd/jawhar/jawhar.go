@@ -139,6 +139,7 @@ func main() {
 	e.DELETE("/apps/:id/webapp/*", controller.ProxyWebApp)
 
 	// system management
+	e.GET("/system/stats", controller.GetSystemStats)
 	e.POST("/system/update/:version", controller.UpdateSystem)
 
 	log.Fatal(e.Start(fmt.Sprintf("%s:%d", options.CmdOptions.Host, options.CmdOptions.Port)))

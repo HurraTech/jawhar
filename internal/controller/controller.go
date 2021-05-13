@@ -38,6 +38,17 @@ type Controller struct {
 	SouqPassword         string
 }
 
+/* GET /system/stats */
+func (c *Controller) GetSystemStats(ctx echo.Context) error {
+	stats, err := agent.Client.GetSystemStats(context.Background(), &pb.GetSystemStatsRequest{})
+	if err != nil {
+		log.Errorf("Error while polling system stats: %v", err)
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{"message": "unexpected error"})
+	}
+
+	return ctx.JSON(http.StatusOK, stats)
+}
+
 /* GET /sources */
 func (c *Controller) GetSources(ctx echo.Context) error {
 	// var partitions []models.DrivePartition
