@@ -27,20 +27,19 @@ var systemPartitions = map[string]bool{
 	"/uboot":    true,
 }
 
-var systemDevices = map[string]bool{
+var systemDevicesPrefixes = map[string]bool{
 	// RPI
-	"/dev/mmcblk0p1": true,
-	"/dev/mmcblk0p2": true,
-	"/dev/mmcblk0p3": true,
-	"/dev/mmcblk0p4": true,
+	"/dev/mmcblk0p": true,
 
 	// Thinkpad
-	"/dev/nvme0n1p2": true,
-	"/dev/nvme0n1p3": true,
-	"/dev/nvme0n1p4": true,
+	"/dev/nvme0n1p": true,
 
 	// EC2
-	"/dev/xvda1": true,
+	"/dev/xvda": true,
+
+	// Mac
+	"/dev/disk0s": true,
+	"/dev/disk1s": true,
 }
 
 var supportedFilesystems = map[string]bool{
@@ -105,8 +104,14 @@ func updateSources() ([]models.DrivePartition, error) {
 				database.DB.Create(&aPartition)
 			}
 
-			if systemPartitions[partition.MountPoint] || systemDevices[partition.DeviceFile] {
+			if systemPartitions[partition.MountPoint] {
 				aPartition.Type = "system"
+			} else {
+				for prefix, _ := range systemDevicesPrefixes {
+					if strings.HasPrefix(partition.DeviceFile, prefix) {
+						aPartition.Type = "system"
+					}
+				}
 			}
 
 			aPartition.DeviceFile = partition.DeviceFile
@@ -149,13 +154,16 @@ func updateInternalStorageDummyPartition(internalStoragePath string, partitions 
 	var tries []string
 	for _, partition := range partitions {
 		tries = append(tries, partition.MountPoint)
-		if partition.Status == "mounted" && strings.HasPrefix(options.CmdOptions.MountPointsRoot, options.CmdOptions.InternalStorage) &&
-			strings.HasPrefix(internalStoragePath, partition.MountPoint) &&
+		if partition.Status == "mounted" && strings.HasPrefix(internalStoragePath, partition.MountPoint) &&
 			len(partition.MountPoint) > len(longestPrefix) {
 			// Internal Storage directory lives in this partition
 			internalPartitionParent = &partition
 			longestPrefix = partition.MountPoint
-			log.Debugf("Drive is candidate for internal storage: %v", partition.Drive)
+			log.Debugf("Partition is candidate for internal storage stats: %v (status=%s, length=%d, longestPrefix=%d, hasCorrectPrefix=%s)", 
+						partition.MountPoint, partition.Status, len(partition.MountPoint), len(longestPrefix), strings.HasPrefix(internalStoragePath, partition.MountPoint))
+		} else {
+			log.Debugf("Partition is NOT candidate for internal storage stats: %v (status=%s, length=%d, longestPrefix=%d, hasCorrectPrefix=%s)", 
+						partition.MountPoint, partition.Status, len(partition.MountPoint), len(longestPrefix), strings.HasPrefix(internalStoragePath, partition.MountPoint))
 		}
 	}
 	if internalPartitionParent == nil {
