@@ -122,7 +122,7 @@ func (c *Controller) MountSource(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, map[string]string{"message": "partition moutned"})
 }
 
-/* POST /sources/:type/:id/search */
+/* GET /sources/:type/:id/search */
 func (c *Controller) SearchSource(ctx echo.Context) error {
 	sourceType := ctx.Param("type")
 	sourceId := ctx.Param("id")

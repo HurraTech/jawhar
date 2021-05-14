@@ -108,7 +108,7 @@ func main() {
 	e.GET("/partitions", controller.GetPartitions)
 	e.POST("/sources/:type/:id/mount", controller.MountSource)
 	e.POST("/sources/:type/:id/unmount", controller.UnmountSource)
-	e.POST("/sources/:type/:id/search", controller.SearchSource)
+	e.GET("/sources/:type/:id/search", controller.SearchSource)
 	e.POST("/sources/:type/:id/index", controller.IndexSource)
 	e.DELETE("/sources/:type/:id/index", controller.DeleteIndex)
 	e.POST("/sources/:type/:id/pauseIndex", controller.PauseIndex)
