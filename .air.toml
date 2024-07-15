@@ -3,8 +3,8 @@ tmp_dir = "tmp"
 
 [build]
 cmd = "go build -o ./tmp/jawhar cmd/jawhar/jawhar.go"
-bin = "tmp/jawhar -S http://127.0.0.1:5060 -b 0.0.0.0"
-full_bin = "./tmp/jawhar -S http://127.0.0.1:5060 -b 0.0.0.0"
+bin = "tmp/jawhar -v -v -S http://127.0.0.1:5060 -b 0.0.0.0"
+full_bin = "./tmp/jawhar -v -v -S http://127.0.0.1:5060 -b 0.0.0.0"
 include_ext = ["go", "tpl", "tmpl", "html"]
 exclude_dir = ["assets", "tmp", "vendor", "frontend/node_modules"]
 include_dir = []
