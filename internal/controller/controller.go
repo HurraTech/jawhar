@@ -56,7 +56,7 @@ func (c *Controller) GetSources(ctx echo.Context) error {
 	database.DB.
 		Order("drives.order_number asc").Order("drives.id asc").
 		Preload("Partitions", func(db *gorm.DB) *gorm.DB {
-			return db.Where("type <> ?", "system").Order("order_number asc")
+			return db.Where("type <> ?", "system").Order("order_number asc").Preload("Drive")
 		}).
 		Where("status = ?", "attached").
 		Find(&drives)
